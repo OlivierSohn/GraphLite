@@ -375,10 +375,21 @@ int main()
     runCypher("MATCH (`n`)       WHERE n.what >= 50 AND n.what <= 60   RETURN id(`n`), `n`.test, `n`.`what`;", db);
 
     // Here, (n.test >= 2.5 AND n.test <= 3.5) matches the node of type Node1,
-    // (n.what >= 50 AND n.what <= 60) matches the node of type Node2
+    // and (n.what >= 50 AND n.what <= 60) matches the node of type Node2
     runCypher("MATCH (`n`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) OR n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`;", db);
 
-    
+    runCypher("MATCH (`n`)-[r]-(`m`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) AND n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`, id(m), id(r);", db);
+
+    // todo write some unit tests
+
+    // todo in MATCH (`n`)-[r]-(`m`) WHERE ... RETURN ..., we could have several strategies based on
+    //   how the constraints are specified, the idea being to optimize the query.
+    //   for example, if there is no constraint on relationships, and there are constraints on nodes (based only on types or also based on properties),
+    //     it may be faster to start by querying the non-system nodes tables, deduce which nodes ids are relevant, and then
+    //     use these ids to filter the relationships table.
+
+    // todo longer path patterns: (a)-[r1]->(b)-[r2]->(c)
+
     // todo deduce labels from where clause (used in FFP):
     //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;", db);
 

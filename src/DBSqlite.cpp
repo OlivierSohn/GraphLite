@@ -842,17 +842,18 @@ void DB::printReq(const std::string& req) const
   if(m_printSQLRequests)
   {
     bool first = true;
-    for(const auto & part : splitOn("UNION ALL ", req))
-    {
-      std::cout << LogIndent{};
-      if(first)
+    for(const auto & part1 : splitOn("UNION ALL ", req))
+      for(const auto & part : splitOn("INNER JOIN ", part1))
       {
-        first = false;
-        std::cout << "[SQL] ";
+        std::cout << LogIndent{};
+        if(first)
+        {
+          first = false;
+          std::cout << "[SQL] ";
+        }
+        else
+          std::cout << "      ";
+        std::cout << part << std::endl;
       }
-      else
-        std::cout << "      ";
-      std::cout << part << std::endl;
-    }
   }
 }
