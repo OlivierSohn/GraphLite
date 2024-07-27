@@ -1,21 +1,10 @@
 #include "DBSqlite.h"
 #include "Logs.h"
+#include "SqlAST.h"
+
 #include <iostream>
 #include <sstream>
 
-std::string toStr(Comparison cmp)
-{
-  switch(cmp)
-  {
-    case Comparison::EQ: return "=";
-    case Comparison::NE: return "<>";
-    case Comparison::LT: return "<";
-    case Comparison::LE: return "<=";
-    case Comparison::GT: return ">";
-    case Comparison::GE: return ">=";
-  }
-  throw std::logic_error("not supported");
-}
 
 struct IDAndType
 {
@@ -403,6 +392,51 @@ std::vector<size_t> DB::labelsToTypeIndices(const Element elem, const std::vecto
   return indices;
 }
 
+// In cypher when a property is missing, it is handled the same as if its value was null,
+// but in SQL when a field is missing the query errors.
+// So we replace non-existing properties by NULL.
+// We also simplify (using a post order traversal) the SQL expression tree,
+// and if the tree results in a single "NULL" node, we return false.
+[[nodiscard]]
+bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
+                           const std::unordered_set<std::string>& sqlFields,
+                           std::string& sqlFilter)
+{
+  if(cypherExprs.empty())
+    throw std::logic_error("expected at least one expression");
+  
+  std::unique_ptr<sql::Expression> sqlExpr;
+  if(cypherExprs.size() == 1)
+    sqlExpr = cypherExprs[0]->toSQLExpressionTree(sqlFields);
+  else
+  {
+    std::vector<std::unique_ptr<sql::Expression>> sqlExprs;
+    sqlExprs.reserve(cypherExprs.size());
+    for(const auto & cypherExpr : cypherExprs)
+      sqlExprs.push_back(cypherExpr->toSQLExpressionTree(sqlFields));
+    sqlExpr = std::make_unique<sql::AggregateExpression>(sql::Aggregator::AND, std::move(sqlExprs));
+  }
+
+  // if the expression would be evaluated as FALSE in the WHERE clause, we return false.
+  // if the expression would be evaluated as TRUE in the WHERE clause, we return true and make the clause empty.
+  if(auto eval = sqlExpr->tryEvaluate())
+  {
+    switch(*eval)
+    {
+      case sql::Evaluation::Unknown:
+      case sql::Evaluation::False:
+        return false;
+      case sql::Evaluation::True:
+        sqlFilter.clear();
+        return true;
+    }
+  }
+  std::ostringstream s;
+  sqlExpr->toString(s);
+  sqlFilter = s.str();
+  return true;
+}
+
 void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDirection,
                                            const std::vector<ReturnClauseTerm>& propertiesNode,
                                            const std::vector<ReturnClauseTerm>& propertiesRel,
@@ -410,9 +444,9 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
                                            const std::vector<std::string>& nodeLabelsStr,
                                            const std::vector<std::string>& relLabelsStr,
                                            const std::vector<std::string>& dualNodeLabelsStr,
-                                           const std::optional<PropertyAndPCE>& nodeFilter,
-                                           const std::optional<PropertyAndPCE>& relFilter,
-                                           const std::optional<PropertyAndPCE>& dualNodeFilter,
+                                           const std::vector<const Expression*>& nodeFilter,
+                                           const std::vector<const Expression*>& relFilter,
+                                           const std::vector<const Expression*>& dualNodeFilter,
                                            FuncProp2&f)
 {
   if(traversalDirection == TraversalDirection::Any)
@@ -582,7 +616,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   auto buildQuery = [this](const auto& elemsByType,
                            const Element elem,
                            const std::vector<std::string>& strProperties,
-                           const std::optional<PropertyAndPCE>& filter,
+                           const std::vector<const Expression*>& filter,
                            std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties)
   {
     bool firstOutter = true;
@@ -597,8 +631,9 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
       if(!findValidProperties(label, strProperties, validProperty))
         // label does not exist.
         continue;
-      if(filter.has_value())
-        if(0 == m_properties[label].count(filter->property))
+      std::string sqlFilter{};
+      if(!filter.empty())
+        if(!toEquivalentSQLFilter(filter, m_properties[label], sqlFilter))
           // These items are excluded by the filter.
           continue;
       bool hasValidProperty{};
@@ -606,11 +641,12 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
         if(valid)
           hasValidProperty = true;
       
-      if(!hasValidProperty && !filter.has_value())
+      if(!hasValidProperty && sqlFilter.empty())
       {
         const auto countProperties = strProperties.size();
-        // we don't need to query the table because we won't do any filtering,
-        // and we already have the ids we are interested in.
+        // no property is valid, so we know all returned property values would be null.
+        // Since we don't do any filtering we can skip this query and instead manually
+        // write the results now.
         for(const auto & id : ids)
           properties[id].resize(countProperties);
         continue;
@@ -641,8 +677,8 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
         s << id;
       }
       s << ")";
-      if(filter.has_value())
-        s << " AND " << filter->property << " " << toStr(filter->pce.comp) << " " << filter->pce.literal.str;
+      if(!sqlFilter.empty())
+        s << " AND " << sqlFilter;
     }
     return s.str();
   };
@@ -734,12 +770,9 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
 void DB::forEachElementPropertyWithLabelsIn(const Element elem,
                                             const std::vector<ReturnClauseTerm>& returnClauseTerms,
                                             const std::vector<std::string>& inputLabels,
-                                            const std::optional<PropertyAndPCE>& filter,
+                                            const Expression* filter,
                                             FuncProp& f)
 {
-  std::optional<std::string> mandatoryProperty;
-  if(filter.has_value())
-    mandatoryProperty = filter->property;
   // extract property names and verify they are in ascending order.
   std::vector<std::string> propertyNames;
   for(size_t i=0, sz=returnClauseTerms.size(); i<sz; ++i)
@@ -758,9 +791,15 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
     if(!findValidProperties(label, propertyNames, validProperty))
       // label does not exist.
       continue;
-    if(filter.has_value())
-      if(0 == m_properties[label].count(filter->property))
+    std::string sqlFilter{};
+    if(filter)
+      if(!toEquivalentSQLFilter(std::vector<const openCypher::Expression*>{filter}, m_properties[label], sqlFilter))
+        // These items are excluded by the filter.
         continue;
+    // in forEachNodeAndRelatedRelationship we have an optimization where
+    // if all properties are invalid and we don't filter,
+    // then we don't query and return results directly.
+    // But here we don't know the ids so we have to query anyway.
     if(firstOutter)
       firstOutter = false;
     else
@@ -779,8 +818,8 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
       s << propertyName;
     }
     s << " FROM " << label;
-    if(filter.has_value())
-      s << " WHERE " << filter->property << " " << toStr(filter->pce.comp) << " " << filter->pce.literal.str;
+    if(!sqlFilter.empty())
+      s << " WHERE " << sqlFilter;
   }
 
   const std::string req = s.str();

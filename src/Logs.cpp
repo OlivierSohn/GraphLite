@@ -36,7 +36,7 @@ void LogIndentScope::endScope()
   }
 }
 
-LogIndentScope logScope(std::ostream& os, const char * scopeName)
+LogIndentScope logScope(std::ostream& os, const std::string& scopeName)
 {
   os << LogIndent{} << scopeName << std::endl;
   return LogIndentScope();

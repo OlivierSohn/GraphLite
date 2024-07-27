@@ -64,7 +64,7 @@ struct ReturnClauseTerm
 
   std::string propertyName; // TODO support more later...
 };
-
+/*
 struct SimplePartialComparisonExpression{
   Comparison comp;
   Literal literal;
@@ -72,10 +72,13 @@ struct SimplePartialComparisonExpression{
 struct PropertyAndPCE {
   std::string property;
   SimplePartialComparisonExpression pce;
-};
+};*/
 
 struct DB
 {
+  using Expression = openCypher::Expression;
+  using TraversalDirection = openCypher::TraversalDirection;
+
   DB(bool printSQLRequests);
   ~DB();
   
@@ -103,7 +106,7 @@ struct DB
   void forEachElementPropertyWithLabelsIn(const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
                                           const std::vector<std::string>& labels,
-                                          const std::optional<PropertyAndPCE>& filter,
+                                          const Expression* filter,
                                           FuncProp&f);
 
   void forEachNodeAndRelatedRelationship(const TraversalDirection,
@@ -113,9 +116,9 @@ struct DB
                                          const std::vector<std::string>& nodeLabelsStr,
                                          const std::vector<std::string>& relLabelsStr,
                                          const std::vector<std::string>& dualNodeLabelsStr,
-                                         const std::optional<PropertyAndPCE>& nodeFilter,
-                                         const std::optional<PropertyAndPCE>& relFilter,
-                                         const std::optional<PropertyAndPCE>& dualNodeFilter,
+                                         const std::vector<const Expression*>& nodeFilter,
+                                         const std::vector<const Expression*>& relFilter,
+                                         const std::vector<const Expression*>& dualNodeFilter,
                                          FuncProp2&f);
 
   void print();

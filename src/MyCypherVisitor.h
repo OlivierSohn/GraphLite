@@ -6,6 +6,8 @@
 #include "cypherparser/CypherVisitor.h"
 #include "CypherAST.h"
 
+namespace openCypher
+{
 class MyCypherVisitor : public CypherVisitor
 {
 public:
@@ -13,23 +15,23 @@ public:
   : m_print(print)
   , m_IDProperty(PropertyKeyName{SymbolicName{IDProperty}})
   {}
-
+  
   const std::vector<std::string>& getErrors() const { return m_errors; }
-
+  
 private:
   void print(const char* str) const;
   
   [[nodiscard]]
-  LogIndentScope scope(const char * scopeName)
+  LogIndentScope scope(std::string const& scopeName)
   {
     if(m_print)
       return logScope(std::cout, scopeName);
     else
       return LogIndentScope{};
   }
-
+  
   std::any visitErrorNode(antlr4::tree::ErrorNode * /*node*/) override;
-
+  
   std::any visitOC_Cypher(CypherParser::OC_CypherContext *context) override;
   
   std::any visitOC_Statement(CypherParser::OC_StatementContext *context) override;
@@ -235,12 +237,48 @@ private:
   std::any visitOC_RightArrowHead(CypherParser::OC_RightArrowHeadContext *context) override;
   
   std::any visitOC_Dash(CypherParser::OC_DashContext *context) override;
-
+  
 private:
   std::any defaultVisit(const char* funcName, int line, antlr4::ParserRuleContext* context);
+  
+  template<typename U>
+  std::any aggregate(const Aggregator a, const std::vector<U>& subExpressions);
   
   PropertyKeyName m_IDProperty;
   bool m_print;
   std::vector<std::string> m_errors;
 };
 
+namespace detail
+{
+std::unique_ptr<Expression> tryStealAsExpressionPtr(std::any && res);
+}
+
+// subExpressions is expected to have one or more elements.
+template<typename U>
+std::any MyCypherVisitor::aggregate(const Aggregator a, const std::vector<U>& subExpressions)
+{
+  const auto scopeName = "Aggregator_" + toStr(a);
+  auto _ = scope(scopeName);
+  if(subExpressions.empty())
+  {
+    m_errors.push_back(scopeName + ": has no sub expression");
+    return {};
+  }
+  else if(subExpressions.size() == 1)
+    return subExpressions[0]->accept(this);
+  AggregateExpression aggregateExpr{a};
+  for(const auto & expr : subExpressions)
+  {
+    auto res = expr->accept(this);
+    if(auto expressionPtr = detail::tryStealAsExpressionPtr(std::move(res)))
+      aggregateExpr.add(std::move(expressionPtr));
+    else
+    {
+      m_errors.push_back(scopeName + ": encountered non-expression");
+      return {};
+    }
+  }
+  return aggregateExpr;
+}
+} // NS

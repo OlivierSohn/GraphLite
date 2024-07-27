@@ -1,0 +1,240 @@
+
+
+#pragma once
+
+#include <string>
+#include <vector>
+#include <optional>
+#include <iostream>
+
+namespace sql
+{
+
+enum class Comparison
+{
+  EQ, // =
+  NE, // <>
+  GT, // >
+  LT, // <
+  GE, // >=
+  LE  // <=
+};
+
+// Cypher and SQL comparison strings are the same.
+inline std::string toStr(Comparison cmp)
+{
+  switch(cmp)
+  {
+    case Comparison::EQ: return "=";
+    case Comparison::NE: return "<>";
+    case Comparison::LT: return "<";
+    case Comparison::LE: return "<=";
+    case Comparison::GT: return ">";
+    case Comparison::GE: return ">=";
+  }
+  throw std::logic_error("not supported");
+}
+
+enum class Evaluation
+{
+  False,
+  Unknown, // for null
+  True
+};
+
+struct Expression
+{
+  virtual ~Expression() = default;
+
+  virtual std::optional<Evaluation> tryEvaluate() = 0;
+  
+  virtual void toString(std::ostream& os) const = 0;
+};
+
+struct Literal : public Expression
+{
+  Literal(std::string const& str)
+  : str(str)
+  {}
+  std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
+  void toString(std::ostream& os) const override { os << str; }
+
+  std::string str;
+};
+struct Field : public Expression
+{
+  Field(std::string const& str)
+  : str(str)
+  {}
+  std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
+  void toString(std::ostream& os) const override { os << str; }
+
+  std::string str;
+};
+
+// Represents a null value.
+struct Null : public Expression
+{
+  std::optional<Evaluation> tryEvaluate() override { return Evaluation::Unknown; }
+  void toString(std::ostream& os) const override { os << "NULL"; }
+};
+
+struct ComparisonExpression : public Expression {
+  ComparisonExpression(std::unique_ptr<Expression> && left, const Comparison comp, std::unique_ptr<Expression> && right)
+  : m_comp(comp)
+  , m_left(std::move(left))
+  , m_right(std::move(right))
+  {}
+
+  std::optional<Evaluation> tryEvaluate() override
+  {
+    auto leftEval = m_left->tryEvaluate();
+    auto rightEval = m_right->tryEvaluate();
+    if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
+      return Evaluation::Unknown;
+    if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
+      return Evaluation::Unknown;
+    if(leftEval.has_value() && rightEval.has_value())
+    {
+      // left and right evaluations are either true or false at this point.
+      
+      const bool left = *leftEval == Evaluation::True;
+      const bool right = *rightEval == Evaluation::True;
+
+      switch(m_comp)
+      {
+        case Comparison::EQ:
+          return (left == right) ? Evaluation::True : Evaluation::False;
+        case Comparison::NE:
+          return (left != right) ? Evaluation::True : Evaluation::False;
+        // we could support more cases in the future...
+      }
+    }
+    return std::nullopt;
+  }
+
+  void toString(std::ostream& os) const override
+  {
+    m_left->toString(os);
+    os << " ";
+    os << toStr(m_comp);
+    os << " ";
+    m_right->toString(os);
+  }
+
+private:
+  std::unique_ptr<Expression> m_left;
+  Comparison m_comp;
+  std::unique_ptr<Expression> m_right;
+};
+
+enum class Aggregator
+{
+  AND,
+  OR,
+};
+
+inline std::string toStr(Aggregator a)
+{
+  switch(a)
+  {
+    case Aggregator::AND: return "AND";
+    case Aggregator::OR: return "OR";
+  }
+  throw std::logic_error("invalid enum value");
+}
+
+struct AggregateExpression : public Expression
+{
+  AggregateExpression(Aggregator a, std::vector<std::unique_ptr<Expression>> && sub)
+  : m_aggregator(a)
+  , m_subExprs(std::move(sub))
+  {}
+
+  std::optional<Evaluation> tryEvaluate() override
+  {
+    switch(m_aggregator)
+    {
+      case Aggregator::AND:
+      {
+        bool hasUnknown{};
+        bool hasNonEvaluated{};
+        for(const auto & subExpr : m_subExprs)
+        {
+          if(auto subEval = subExpr->tryEvaluate())
+          {
+            switch(*subEval)
+            {
+              case Evaluation::Unknown:
+                hasUnknown = true;
+                break;
+              case Evaluation::False:
+                return Evaluation::False;
+              case Evaluation::True:
+                break;
+            }
+          }
+          else
+            hasNonEvaluated = true;
+        }
+        if(hasUnknown)
+          return Evaluation::Unknown;
+        if(hasNonEvaluated)
+          return std::nullopt;
+        return Evaluation::True;
+        break;
+      }
+
+      case Aggregator::OR:
+      {
+        bool hasUnknown{};
+        bool hasNonEvaluated{};
+        for(const auto & subExpr : m_subExprs)
+        {
+          if(auto subEval = subExpr->tryEvaluate())
+          {
+            switch(*subEval)
+            {
+              case Evaluation::Unknown:
+                hasUnknown = true;
+                break;
+              case Evaluation::False:
+                break;
+              case Evaluation::True:
+                return Evaluation::True;
+            }
+          }
+          else
+            hasNonEvaluated = true;
+        }
+        if(hasNonEvaluated)
+          return std::nullopt;
+        if(hasUnknown)
+          return Evaluation::Unknown;
+        return Evaluation::False;
+        break;
+      }
+    }
+    throw std::logic_error("invalid enum value");
+  }
+
+  void toString(std::ostream& os) const override {
+    bool first = true;
+    for(const auto & subExpr : m_subExprs)
+    {
+      if(first)
+        first = false;
+      else
+        os << toStr(m_aggregator);
+      os << " (";
+      subExpr->toString(os);
+      os << ") ";
+    }
+  }
+
+private:
+  Aggregator m_aggregator;
+  std::vector<std::unique_ptr<Expression>> m_subExprs;
+};
+
+}

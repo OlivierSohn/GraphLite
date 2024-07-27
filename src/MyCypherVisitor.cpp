@@ -1,6 +1,24 @@
 #include "MyCypherVisitor.h"
 #include "CypherAST.h"
 
+namespace openCypher
+{
+
+namespace detail
+{
+std::unique_ptr<Expression> tryStealAsExpressionPtr(std::any && res)
+{
+  if(res.type() == typeid(NonArithmeticOperatorExpression))
+    return std::any_cast<NonArithmeticOperatorExpression>(res).StealAsPtr();
+  else if(res.type() == typeid(ComparisonExpression))
+    return std::any_cast<ComparisonExpression>(res).StealAsPtr();
+  else if(res.type() == typeid(AggregateExpression))
+    return std::any_cast<AggregateExpression>(res).StealAsPtr();
+  else
+    return {};
+}
+} // NS
+
 std::string trim(const char c, std::string && str)
 {
   if(str.back() == c)
@@ -272,9 +290,9 @@ std::any MyCypherVisitor::visitOC_Where(CypherParser::OC_WhereContext *context) 
   auto _ = scope("WhereContext");
 
   auto res = context->oC_Expression()->accept(this);
-  if(res.type() == typeid(ComparisonExpression))
-    return WhereClause{std::move(std::any_cast<ComparisonExpression>(res))};
-  m_errors.push_back("OC_Where only supports ComparisonExpression for now.");
+  if(auto ptr = detail::tryStealAsExpressionPtr(std::move(res)))
+    return WhereClause{std::shared_ptr<Expression>{ptr.release()}};
+  m_errors.push_back("OC_Where encounterd unsupported expression.");
   return {};
 }
 
@@ -495,50 +513,15 @@ std::any MyCypherVisitor::visitOC_Expression(CypherParser::OC_ExpressionContext 
 }
 
 std::any MyCypherVisitor::visitOC_OrExpression(CypherParser::OC_OrExpressionContext *context) {
-  auto _ = scope("OrExpression");
-  if(context->children.size() != 1)
-  {
-    m_errors.push_back("OC_OrExpression expects a single child");
-    return {};
-  }
-  
-  auto res = context->children[0]->accept(this);
-  if(res.type() == typeid(NonArithmeticOperatorExpression))
-    return res;
-  else if(res.type() == typeid(ComparisonExpression))
-    return res;
-  else
-    m_errors.push_back("unsupported alternative in OC_OrExpression");
-  return {};
+  return aggregate(Aggregator::OR, context->oC_XorExpression());
 }
 
 std::any MyCypherVisitor::visitOC_XorExpression(CypherParser::OC_XorExpressionContext *context) {
-  auto _ = scope("XorExpression");
-  if(context->children.size() != 1)
-  {
-    m_errors.push_back("OC_XorExpression expects a single child");
-    return {};
-  }
-  
-  auto res = context->children[0]->accept(this);
-  if(res.type() == typeid(NonArithmeticOperatorExpression))
-    return res;
-  else if(res.type() == typeid(ComparisonExpression))
-    return res;
-  else
-    m_errors.push_back("unsupported alternative in OC_XorExpression");
-  return {};
+  return aggregate(Aggregator::XOR, context->oC_AndExpression());
 }
 
 std::any MyCypherVisitor::visitOC_AndExpression(CypherParser::OC_AndExpressionContext *context) {
-  auto _ = scope("AndExpression");
-  
-  const auto expres = context->oC_NotExpression();
-
-  if(expres.size() == 1)
-    return expres[0]->accept(this);
-  
-  return {};
+  return aggregate(Aggregator::AND, context->oC_NotExpression());
 }
 
 std::any MyCypherVisitor::visitOC_NotExpression(CypherParser::OC_NotExpressionContext *context) {
@@ -577,7 +560,7 @@ std::any MyCypherVisitor::visitOC_ComparisonExpression(CypherParser::OC_Comparis
     auto resLeft = context->children[0]->accept(this);
     if(resLeft.type() != typeid(NonArithmeticOperatorExpression))
     {
-      m_errors.push_back("OC_ComparisonExpression left shoud be NonArithmeticOperatorExpression");
+      m_errors.push_back("OC_ComparisonExpression left should be NonArithmeticOperatorExpression");
       return {};
     }
     ComparisonExpression res;
@@ -629,7 +612,7 @@ std::any MyCypherVisitor::visitOC_PartialComparisonExpression(CypherParser::OC_P
   
   if(resExp.type() != typeid(NonArithmeticOperatorExpression))
   {
-    m_errors.push_back("OC_PartialComparisonExpression right shoud be NonArithmeticOperatorExpression");
+    m_errors.push_back("OC_PartialComparisonExpression right should be NonArithmeticOperatorExpression");
     return {};
   }
   res.rightExp = std::move(std::any_cast<NonArithmeticOperatorExpression>(resExp));
@@ -792,6 +775,8 @@ std::any MyCypherVisitor::visitOC_Atom(CypherParser::OC_AtomContext *context) {
     return Atom{std::move(std::any_cast<Variable>(res))};
   else if(res.type() == typeid(Literal))
     return Atom{std::move(std::any_cast<Literal>(res))};
+  else if(res.type() == typeid(AggregateExpression))
+    return Atom{std::move(std::any_cast<AggregateExpression>(res))};
   else if(res.type() == typeid(NonArithmeticOperatorExpression))
     // To support the id(...) function, we rewrite the function call into a property access.
     return res;
@@ -830,8 +815,14 @@ std::any MyCypherVisitor::visitOC_PatternPredicate(CypherParser::OC_PatternPredi
 }
 
 std::any MyCypherVisitor::visitOC_ParenthesizedExpression(CypherParser::OC_ParenthesizedExpressionContext *context) {
-  m_errors.push_back("OC_ParenthesizedExpression not supported");
-  return defaultVisit("ParenthesizedExpression", __LINE__, context);
+  auto _ = scope("ParenthesizedExpression");
+  if(auto e = context->oC_Expression())
+    return e->accept(this);
+  else
+  {
+    m_errors.push_back("OC_ParenthesizedExpression has null expression");
+    return {};
+  }
 }
 
 std::any MyCypherVisitor::visitOC_IdInColl(CypherParser::OC_IdInCollContext *context) { return defaultVisit("IdInColl", __LINE__, context); }
@@ -1032,3 +1023,5 @@ std::any MyCypherVisitor::visitOC_LeftArrowHead(CypherParser::OC_LeftArrowHeadCo
 std::any MyCypherVisitor::visitOC_RightArrowHead(CypherParser::OC_RightArrowHeadContext *context) { return defaultVisit("RightArrowHead", __LINE__, context); }
 
 std::any MyCypherVisitor::visitOC_Dash(CypherParser::OC_DashContext *context) { return defaultVisit("Dash", __LINE__, context); }
+
+} // NS

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <string>
 
 // RAII-object to indent logs in a scope.
 struct LogIndentScope
@@ -19,7 +20,7 @@ std::ostream& operator <<(std::ostream& os, LogIndent _);
 
 
 [[nodiscard]]
-LogIndentScope logScope(std::ostream& os, const char * scopeName);
+LogIndentScope logScope(std::ostream& os, const std::string& scopeName);
 
 
 //

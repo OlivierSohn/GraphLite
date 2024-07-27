@@ -8,6 +8,8 @@
 #include "CypherAST.h"
 #include "antlr4-runtime.h"
 
+namespace openCypher
+{
 SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& query)
 {
   auto chars = antlr4::ANTLRInputStream(query);
@@ -75,37 +77,33 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   if(mpp.mayVariable.has_value())
     throw std::logic_error("Not Implemented (Expected no variable before match pattern)");
 
-  // Verify the clause has this form:
-  //   <node or dualNode or rel>.<property> cmp literal
-  std::unordered_map<std::string /*node or dualNode or rel*/, PropertyAndPCE> whereTermsByVar;
+  std::unordered_map<
+  std::string /*node or dualNode or rel*/,
+  std::vector<const Expression*> /* expressions of the vector are ANDed*/>
+  whereTermsByVar;
+
+  // Verify the expression tree is in this form (because for now this is the only form we know how to handle):
+  //
+  //                     |And|
+  //                    /  |  \
+  //                  /    |    \
+  //             "node"  "rel"   "dual node"
+  //          sub tree  sub tree  sub tree
+  //
+  // and in each sub tree, we only use properties of "node" (resp. "rel", "dual node").
+  //
+  // We verify this while doing a post-order traversal to construct the
+  //   "node', "rel", "dual node" openCypher expression subtrees.
+  //
+  // If the tree is not in this form, an exception is thrown.
   if(spq.mayReadingClause->match.where.has_value())
-  {
-    const auto& ce = spq.mayReadingClause->match.where->exp;
-    if(!ce.leftExp.mayPropertyName.has_value())
-      throw std::logic_error("Expected a property name");
-
-    SimplePartialComparisonExpression spce;
-    spce.comp = ce.partial.comp;
-    if(ce.partial.rightExp.mayPropertyName.has_value())
-      // cases:
-      // - WHERE a.test1 < a.test2
-      // - WHERE a.test < b.test
-      throw std::logic_error("Property name not supported yet");
-    // Cannot be a Variable (todo support this later, see comment above)
-    spce.literal = std::get<Literal>(ce.partial.rightExp.atom.var);
-
-    // Canot be a Literal
-    auto res = whereTermsByVar.emplace(std::get<Variable>(ce.leftExp.atom.var).symbolicName.str,
-                                       PropertyAndPCE{ce.leftExp.mayPropertyName->symbolicName.str, std::move(spce)});
-    if(!res.second)
-      throw std::logic_error("Could not insert term");
-  }
-
+    spq.mayReadingClause->match.where->exp->asAndEquiVarSubTrees(whereTermsByVar);
+  
   const auto & app = mpp.anonymousPatternPart;
-
+  
   const std::unordered_map<std::string, std::vector<ReturnClauseTerm>> props =
   extractProperties(spq.returnClause.naoExps);
-
+  
   auto nodePatternIsActive = [&](const NodePattern& np)
   {
     if(np.mayVariable.has_value() && props.count(np.mayVariable->symbolicName.str))
@@ -116,7 +114,7 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   
   const bool leftNodeVarIsActive = nodePatternIsActive(app.firstNodePattern);
   const bool rightNodeVarIsActive = (app.patternElementChains.size() == 1) && nodePatternIsActive(app.patternElementChains[0].nodePattern);
-
+  
   if((app.patternElementChains.size() == 1) && (leftNodeVarIsActive || rightNodeVarIsActive))
   {
     // In this branch we support triplets (Node)-[Rel]-(DualNode) where:
@@ -131,28 +129,28 @@ void runSingleQuery(const SingleQuery& q, DB& db)
     //   - both, or
     //   - nothing
     // - Relationship direction can be anything.
-
+    
     // The first SQL query will be on the system relationships table, joined with the system nodes table
     // because we need to know some nodes types (or nodes properties).
-
+    
     const auto& leftNodePattern = app.firstNodePattern;
     const auto& rightNodePattern = app.patternElementChains[0].nodePattern;
-
+    
     const auto& nodePattern = leftNodeVarIsActive ? leftNodePattern : rightNodePattern;
     const auto& dualNodePattern = leftNodeVarIsActive ? rightNodePattern : leftNodePattern;
-
+    
     const auto& nodeVariable = nodePattern.mayVariable;
     const auto& relVariable = app.patternElementChains[0].relPattern.mayVariable;
     const auto& dualNodeVariable = dualNodePattern.mayVariable;
-
+    
     const auto& nodeLabels = nodePattern.labels;
     const auto& relLabels = app.patternElementChains[0].relPattern.labels;
     const auto& dualNodeLabels = dualNodePattern.labels;
-
+    
     std::vector<ReturnClauseTerm> propertiesNode;
     std::vector<ReturnClauseTerm> propertiesRel;
     std::vector<ReturnClauseTerm> propertiesDualNode;
-
+    
     if(nodeVariable.has_value())
       if(auto it = props.find(nodeVariable->symbolicName.str); it != props.end())
         propertiesNode = it->second;
@@ -173,15 +171,19 @@ void runSingleQuery(const SingleQuery& q, DB& db)
         allVariables.insert(relVariable->symbolicName.str);
       if(dualNodeVariable.has_value())
         allVariables.insert(dualNodeVariable->symbolicName.str);
-
+      
       for(const auto & [varName, _] : props)
         if(0 == allVariables.count(varName))
-          throw std::logic_error("Variable '" + varName + "' not found.");
+          throw std::logic_error("Variable '" + varName + "' used in the return clause was not defined.");
+      
+      for(const auto &[varName, _]: whereTermsByVar)
+        if(0 == allVariables.count(varName))
+          throw std::logic_error("Variable '" + varName + "' usesd in the where clause was not defined.");
     }
-
-    std::optional<PropertyAndPCE> nodeFilter;
-    std::optional<PropertyAndPCE> relFilter;
-    std::optional<PropertyAndPCE> dualNodeFilter;
+    
+    std::vector<const Expression*> nodeFilter{};
+    std::vector<const Expression*> relFilter{};
+    std::vector<const Expression*> dualNodeFilter{};
     if(nodeVariable.has_value())
       if(const auto it = whereTermsByVar.find(nodeVariable->symbolicName.str); it != whereTermsByVar.end())
         nodeFilter = it->second;
@@ -191,7 +193,7 @@ void runSingleQuery(const SingleQuery& q, DB& db)
     if(dualNodeVariable.has_value())
       if(const auto it = whereTermsByVar.find(dualNodeVariable->symbolicName.str); it != whereTermsByVar.end())
         dualNodeFilter = it->second;
-
+    
     {
       auto f = std::function{[&](const std::vector<std::optional<std::string>>& nodePropertiesValues,
                                  const std::vector<std::optional<std::string>>& relationshipPropertiesValues,
@@ -226,13 +228,13 @@ void runSingleQuery(const SingleQuery& q, DB& db)
     }
     return;
   }
-
+  
   // In this branch we support:
   // - MATCH (`n`)
   // - MATCH ()-[`r`]->()
   
   // The SQL queries will be on non-system relationships tables and non-system nodes tables.
-
+  
   const auto& nodePattern = app.firstNodePattern;
   const bool singleNodeVariable = nodePattern.mayVariable.has_value() && app.patternElementChains.empty();
   const bool singleRelationshipVariable =
@@ -244,15 +246,15 @@ void runSingleQuery(const SingleQuery& q, DB& db)
     throw std::logic_error("Not Implemented (Expected a node or relationship variable)");
   if(singleNodeVariable && singleRelationshipVariable)
     throw std::logic_error("Impossible");
-
+  
   const Element elem = singleNodeVariable ? Element::Node : Element::Relationship;
   
   const auto& variable = singleNodeVariable ? *nodePattern.mayVariable : *app.patternElementChains[0].relPattern.mayVariable;
   const auto& labels = singleNodeVariable ? nodePattern.labels : app.patternElementChains[0].relPattern.labels;
-
+  
   if(spq.returnClause.naoExps.empty())
     throw std::logic_error("Not Implemented (Expected some non arithmetic expression)");
-    
+  
   const auto itProps = props.find(variable.symbolicName.str);
   std::vector<ReturnClauseTerm> properties;
   if(itProps != props.end())
@@ -264,7 +266,7 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   for(const auto & [varName, constraint] : whereTermsByVar)
     if(varName != variable.symbolicName.str)
       throw std::logic_error("Variable '" + varName + "' not found.");
-
+  
   const std::vector<std::string> labelsStr = asStringVec(labels);
   
   {
@@ -276,10 +278,18 @@ void runSingleQuery(const SingleQuery& q, DB& db)
       std::cout << std::endl;
     }};
     auto it = whereTermsByVar.find(variable.symbolicName.str);
+    const Expression * filter{};
+    if(it != whereTermsByVar.end())
+    {
+      if(it->second.size() != 1)
+        throw std::logic_error("In single var case we should have at most a single expression in whereTermsByVar.");
+      else
+        filter = it->second[0];
+    }
     db.forEachElementPropertyWithLabelsIn(elem,
                                           properties,
                                           labelsStr,
-                                          (it == whereTermsByVar.end()) ? std::nullopt : std::optional{it->second},
+                                          filter,
                                           f);
   }
 }
@@ -292,9 +302,12 @@ void runCypher(const std::string& cyperQuery, DB&db)
   const auto _ = LogIndentScope{};
   runSingleQuery(ast, db);
 }
+} // NS
 
 int main()
 {
+  using openCypher::runCypher;
+
   const bool printSQLRequests{true};
 
   DB db(printSQLRequests);
@@ -336,12 +349,6 @@ int main()
     runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(n) = 1 RETURN id(m), id(n), id(`r`), `m`.test;", db);
     runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(m) = 1 RETURN id(m), id(n), id(`r`), `n`.test;", db);
     
-    // todo where clause with multiple terms.
-    runCypher("MATCH (`n`)       WHERE n.test >= 2.5 AND n.test <= 3.5   RETURN id(`n`), `n`.test, `n`.`what`;", db);
-
-    
-    
-    
     runCypher("MATCH (`n`)       RETURN id(`n`), `n`.test, `n`.`what`;", db);
     runCypher("MATCH (`n`:Node1) RETURN id(`n`), `n`.test, `n`.`what`;", db);
     runCypher("MATCH (`n`:Node2) RETURN id(`n`), `n`.test, `n`.`what`;", db);
@@ -361,6 +368,15 @@ int main()
     runCypher("MATCH (`m`:Node2)<-[`r`]-(`n`:Node1) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test, `m`.test;", db);
     runCypher("MATCH (`m`:Node2)<-[]-(`n`:Node1) RETURN id(`m`), `n`.test;", db);
 
+    // where clause with multiple terms.
+    runCypher("MATCH (`n`)       WHERE n.test >= 2.5 AND n.test <= 3.5   RETURN id(`n`), `n`.test, `n`.`what`;", db);
+    runCypher("MATCH (`n`)       WHERE n.test >= 2.5 OR n.test <= 3.5   RETURN id(`n`), `n`.test, `n`.`what`;", db);
+    // Here, the SQL query is not done against the table of Node2 because it doesn't have the 'what' property.
+    runCypher("MATCH (`n`)       WHERE n.what >= 50 AND n.what <= 60   RETURN id(`n`), `n`.test, `n`.`what`;", db);
+
+    // Here, (n.test >= 2.5 AND n.test <= 3.5) matches the node of type Node1,
+    // (n.what >= 50 AND n.what <= 60) matches the node of type Node2
+    runCypher("MATCH (`n`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) OR n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`;", db);
 
     
     // todo deduce labels from where clause (used in FFP):
