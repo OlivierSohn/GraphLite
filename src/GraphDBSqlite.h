@@ -61,21 +61,25 @@ struct ReturnClauseTerm
   // position of the term in the return clause.
   size_t returnClausePosition;
 
-  std::string propertyName; // TODO support more later...
+  openCypher::PropertyKeyName propertyName; // TODO support more later...
 };
 
 
 struct GraphDB
 {
+  using Variable = openCypher::Variable;
   using Expression = openCypher::Expression;
+  using SymbolicName = openCypher::SymbolicName;
+  using PropertyKeyName = openCypher::PropertyKeyName;
   using TraversalDirection = openCypher::TraversalDirection;
-  
+  using ExpressionsByVarAndProperties = openCypher::ExpressionsByVarAndProperties;
+
   // Contains information to order results in the same order as they were specified in the return clause.
   using ResultOrder = std::vector<std::pair<
   unsigned /* i = index into VecValues, VecColumnNames*/,
   unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
   
-  using VecColumnNames = std::vector<const std::vector<std::string>*>;
+  using VecColumnNames = std::vector<const std::vector<PropertyKeyName>*>;
   using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
   
   using FuncResults = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
@@ -90,14 +94,14 @@ struct GraphDB
   // todo support typed properties.
   void addType(std::string const& typeName,
                bool isNode,
-               std::vector<std::string> const& properties);
+               std::vector<PropertyKeyName> const& properties);
   
   ID addNode(const std::string& type,
-             const std::vector<std::pair<std::string, std::string>>& propValues);
+             const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
   ID addRelationship(const std::string& type,
                      const ID& originEntity,
                      const ID& destinationEntity,
-                     const std::vector<std::pair<std::string, std::string>>& propValues);
+                     const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
   
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.
@@ -110,16 +114,18 @@ struct GraphDB
                                           const std::vector<const Expression*>* filter,
                                           FuncResults& f);
   
+  // |nonEquiVarIDPropertyFilter| corresponds to constraints on id properties of _different_ variables.
   void forEachNodeAndRelatedRelationship(const TraversalDirection,
+                                         const Variable* nodeVar,
+                                         const Variable* relVar,
+                                         const Variable* dualNodeVar,
                                          const std::vector<ReturnClauseTerm>& propertiesNode,
                                          const std::vector<ReturnClauseTerm>& propertiesRel,
                                          const std::vector<ReturnClauseTerm>& propertiesDualNode,
                                          const std::vector<std::string>& nodeLabelsStr,
                                          const std::vector<std::string>& relLabelsStr,
                                          const std::vector<std::string>& dualNodeLabelsStr,
-                                         const std::vector<const Expression*>* nodeFilter,
-                                         const std::vector<const Expression*>* relFilter,
-                                         const std::vector<const Expression*>* dualNodeFilter,
+                                         const ExpressionsByVarAndProperties& allFilters,
                                          FuncResults& f);
   
   void print();
@@ -130,7 +136,7 @@ private:
   IndexedTypes<size_t> m_indexedNodeTypes;
   IndexedTypes<size_t> m_indexedRelationshipTypes;
   // key : namedType.
-  std::unordered_map<std::string, std::unordered_set<std::string>> m_properties;
+  std::unordered_map<std::string, std::set<PropertyKeyName>> m_properties;
   
   const FuncOnSQLQuery m_fOnSQLQuery;
   const FuncOnDBDiagnosticContent m_fOnDiagnostic;
@@ -139,22 +145,15 @@ private:
   std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
   
   [[nodiscard]]
-  bool prepareProperties(const std::string& typeName, const std::vector<std::pair<std::string, std::string>>& propValues, std::vector<std::string>& propertyNames, std::vector<std::string>& propertyValues);
+  bool prepareProperties(const std::string& typeName, const std::vector<std::pair<PropertyKeyName, std::string>>& propValues, std::vector<PropertyKeyName>& propertyNames, std::vector<std::string>& propertyValues);
   
   [[nodiscard]]
-  bool findValidProperties(const std::string& typeName, const std::vector<std::string>& propNames, std::vector<bool>& valid) const;
+  bool findValidProperties(const std::string& typeName, const std::vector<PropertyKeyName>& propNames, std::vector<bool>& valid) const;
   
   void addElement(const std::string& typeName,
                   const ID& id,
-                  const std::vector<std::pair<std::string, std::string>>& propValues);
-    
-  void splitIDsFilters(const std::vector<const Expression*>* allFilters,
-                       std::vector<const Expression*>& IDsFilters,
-                       std::vector<const Expression*>& PostFilters) const;
-  void splitIDsFilters(const Expression& filter,
-                       std::vector<const Expression*>& IDsFilter,
-                       std::vector<const Expression*>& PostFilters) const;
-  
+                  const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
+
   static ResultOrder computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses);
 };
 

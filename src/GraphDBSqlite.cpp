@@ -140,7 +140,7 @@ GraphDB::~GraphDB()
   sqlite3_close(m_db);
 }
 
-void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<std::string> &properties)
+void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<PropertyKeyName> &properties)
 {
   {
     const std::string req = "DROP TABLE " + typeName + ";";
@@ -186,19 +186,18 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
       m_indexedNodeTypes.add(typeIdx, typeName);
     else
       m_indexedRelationshipTypes.add(typeIdx, typeName);
-    m_properties[typeName] = std::unordered_set<std::string>{
-      properties.begin(),
-      properties.end()
-    };
-    m_properties[typeName].insert(m_idProperty);
+    auto & set = m_properties[typeName];
+    for(const auto & propertyName : properties)
+      set.insert(propertyName);
+    m_properties[typeName].insert(PropertyKeyName{SymbolicName{m_idProperty}});
   }
   // todo rollback if there is an error.
 }
 
 bool GraphDB::prepareProperties(const std::string& typeName,
-                           const std::vector<std::pair<std::string, std::string>>& propValues,
-                           std::vector<std::string>& propertyNames,
-                           std::vector<std::string>& propertyValues)
+                                const std::vector<std::pair<PropertyKeyName, std::string>>& propValues,
+                                std::vector<PropertyKeyName>& propertyNames,
+                                std::vector<std::string>& propertyValues)
 {
   propertyNames.clear();
   propertyValues.clear();
@@ -218,8 +217,8 @@ bool GraphDB::prepareProperties(const std::string& typeName,
 }
 
 bool GraphDB::findValidProperties(const std::string& typeName,
-                             const std::vector<std::string>& propNames,
-                             std::vector<bool>& valid) const
+                                  const std::vector<PropertyKeyName>& propNames,
+                                  std::vector<bool>& valid) const
 {
   valid.clear();
 
@@ -234,7 +233,7 @@ bool GraphDB::findValidProperties(const std::string& typeName,
 
 
 ID GraphDB::addNode(const std::string& typeName,
-               const std::vector<std::pair<std::string, std::string>>& propValues)
+                    const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
 {
   const auto typeIdx = m_indexedNodeTypes.getIfExists(typeName);
   if(!typeIdx.has_value())
@@ -263,9 +262,9 @@ ID GraphDB::addNode(const std::string& typeName,
 
 // There is a system table to generate relationship ids.
 ID GraphDB::addRelationship(const std::string& typeName,
-                       const ID& originEntity,
-                       const ID& destinationEntity,
-                       const std::vector<std::pair<std::string, std::string>>& propValues)
+                            const ID& originEntity,
+                            const ID& destinationEntity,
+                            const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
 {
   const auto typeIdx = m_indexedRelationshipTypes.getIfExists(typeName);
   if(!typeIdx.has_value())
@@ -323,10 +322,10 @@ ID GraphDB::addRelationship(const std::string& typeName,
 }
 
 void GraphDB::addElement(const std::string& typeName,
-                    const ID& id,
-                    const std::vector<std::pair<std::string, std::string>>& propValues)
+                         const ID& id,
+                         const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
 {
-  std::vector<std::string> propertyNames;
+  std::vector<PropertyKeyName> propertyNames;
   std::vector<std::string> propertyValues;
   if(!prepareProperties(typeName, propValues, propertyNames, propertyValues))
     throw std::logic_error("some properties don't exist in the schema.");
@@ -428,8 +427,8 @@ std::vector<size_t> GraphDB::labelsToTypeIndices(const Element elem, const std::
 // and if the tree results in a single "NULL" node, we return false.
 [[nodiscard]]
 bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
-                           const std::unordered_set<std::string>& sqlFields,
-                           const std::unordered_map<std::string, std::string>& propertyMap,
+                           const std::set<openCypher::PropertyKeyName>& sqlFields,
+                           const std::map<openCypher::Variable, std::map<openCypher::PropertyKeyName, std::string>>& propertyMappingCypherToSQL,
                            std::string& sqlFilter)
 {
   sqlFilter.clear();
@@ -438,13 +437,13 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
   
   std::unique_ptr<sql::Expression> sqlExpr;
   if(cypherExprs.size() == 1)
-    sqlExpr = cypherExprs[0]->toSQLExpressionTree(sqlFields);
+    sqlExpr = cypherExprs[0]->toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
   else
   {
     std::vector<std::unique_ptr<sql::Expression>> sqlExprs;
     sqlExprs.reserve(cypherExprs.size());
     for(const auto & cypherExpr : cypherExprs)
-      sqlExprs.push_back(cypherExpr->toSQLExpressionTree(sqlFields));
+      sqlExprs.push_back(cypherExpr->toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL));
     sqlExpr = std::make_unique<sql::AggregateExpression>(sql::Aggregator::AND, std::move(sqlExprs));
   }
 
@@ -462,90 +461,100 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
     }
   }
   std::ostringstream s;
-  sqlExpr->toString(propertyMap, s);
+  sqlExpr->toString(s);
   sqlFilter = s.str();
   return true;
 }
 
-// Partitions filters found in |allFilters| into
-// |IDsFilters| containing filters that can be preapplied on IDs (when querying the relationships system table)
-// and |Filters| that must be applied when querying non-system tables.
-void GraphDB::splitIDsFilters(const std::vector<const Expression*>* allFilters,
-                         std::vector<const Expression*>& IDsFilters,
-                         std::vector<const Expression*>& PostFilters) const
-{
-  IDsFilters.clear();
-  PostFilters.clear();
-  if(!allFilters)
-    return;
-  for(const auto * filter : *allFilters)
-    splitIDsFilters(*filter, IDsFilters, PostFilters);
-}
 
-void GraphDB::splitIDsFilters(const Expression& filter,
-                         std::vector<const Expression*>& IDsFilters,
-                         std::vector<const Expression*>& PostFilters) const
+size_t countPropertiesNotEqual(const openCypher::PropertyKeyName& property,
+                               const openCypher::VarsAndProperties& varsAndProperties)
 {
-  using openCypher::AggregateExpression;
-  using openCypher::Aggregator;
-  
-  // if filter is an AND aggregation, we recursively call this function on sub-expressions
-  if(auto * aggr = dynamic_cast<const AggregateExpression*>(&filter))
-    if(aggr->aggregator() == Aggregator::AND)
-      for(const auto & subExpr : aggr->subExpressions())
-        splitIDsFilters(*subExpr, IDsFilters, PostFilters);
-  
-  // if the entire expression only uses the property m_idProperty, place it in
-  // IDsFilter, else place it in PostFilters.
-  
-  bool isIDFilter{};
-  try
-  {
-    isIDFilter = (filter.asEquiPropertyTree() == m_idProperty);
-  }
-  catch(std::exception const &)
-  {
-  }
-  if(isIDFilter)
-    IDsFilters.push_back(&filter);
-  else
-    PostFilters.push_back(&filter);
+  size_t count{};
+  for(const auto & [_, properties]: varsAndProperties)
+    count += properties.size() - properties.count(property);
+  return count;
 }
 
 void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDirection,
-                                           const std::vector<ReturnClauseTerm>& propertiesNode,
-                                           const std::vector<ReturnClauseTerm>& propertiesRel,
-                                           const std::vector<ReturnClauseTerm>& propertiesDualNode,
-                                           const std::vector<std::string>& nodeLabelsStr,
-                                           const std::vector<std::string>& relLabelsStr,
-                                           const std::vector<std::string>& dualNodeLabelsStr,
-                                           const std::vector<const Expression*>* nodeFilterAll,
-                                           const std::vector<const Expression*>* relFilterAll,
-                                           const std::vector<const Expression*>* dualNodeFilterAll,
-                                           FuncResults&f)
+                                                const Variable* nodeVar,
+                                                const Variable* relVar,
+                                                const Variable* dualNodeVar,
+                                                const std::vector<ReturnClauseTerm>& propertiesNode,
+                                                const std::vector<ReturnClauseTerm>& propertiesRel,
+                                                const std::vector<ReturnClauseTerm>& propertiesDualNode,
+                                                const std::vector<std::string>& nodeLabelsStr,
+                                                const std::vector<std::string>& relLabelsStr,
+                                                const std::vector<std::string>& dualNodeLabelsStr,
+                                                const ExpressionsByVarAndProperties& allFilters,
+                                                FuncResults&f)
 {
   if(traversalDirection == TraversalDirection::Any)
   {
     // Todo: Divide the count of queries by 2 with a special case.
     for(const auto td : {TraversalDirection::Forward, TraversalDirection::Backward})
-      forEachNodeAndRelatedRelationship(td, propertiesNode, propertiesRel, propertiesDualNode, nodeLabelsStr, relLabelsStr, dualNodeLabelsStr,
-                                        nodeFilterAll, relFilterAll, dualNodeFilterAll, f);
+      forEachNodeAndRelatedRelationship(td, nodeVar, relVar, dualNodeVar, propertiesNode, propertiesRel, propertiesDualNode,
+                                        nodeLabelsStr, relLabelsStr, dualNodeLabelsStr,
+                                        allFilters, f);
     return;
   }
 
-  std::vector<const Expression*> nodeFilterIDs;
-  std::vector<const Expression*> nodeFilterPost;
-  std::vector<const Expression*> dualNodeFilterIDs;
-  std::vector<const Expression*> dualNodeFilterPost;
-  std::vector<const Expression*> relFilterIDs;
-  std::vector<const Expression*> relFilterPost;
-  
-  splitIDsFilters(nodeFilterAll, nodeFilterIDs, nodeFilterPost);
-  splitIDsFilters(relFilterAll, relFilterIDs, relFilterPost);
-  splitIDsFilters(dualNodeFilterAll, dualNodeFilterIDs, dualNodeFilterPost);
+  std::set<Variable> varsWithIDFiltering;
+  std::vector<const Expression*> idFilters;
+  std::map<Variable, std::vector<const Expression*>> postFilters;
 
+  const auto idProperty = PropertyKeyName{SymbolicName{m_idProperty}};
+  for(const auto & [varsAndProperties, expressions] : allFilters)
+  {
+    if(varsAndProperties.size() >= 2)
+    {
+      // 'expressions' use 2 or more variables
+      
+      if(countPropertiesNotEqual(idProperty, varsAndProperties) > 0)
+        // At least one non-id property is used.
+        // We could support this in the future by evaluating these expressions at the end
+        // of this function when returning the results.
+        throw std::logic_error("[Not supported] A non-equi-var expression is using non-id properties.");
+      
+      // only id properties are used so we will use these expressions to filter the system relationships table.
+      
+      for(const auto & [var, _] : varsAndProperties)
+        varsWithIDFiltering.insert(var);
+      idFilters.insert(idFilters.end(), expressions.begin(), expressions.end());
+    }
+    else if(varsAndProperties.size() == 1)
+    {
+      // 'expressions' uses a single variable
+      if(countPropertiesNotEqual(idProperty, varsAndProperties) > 0)
+      {
+        // At least one non-id property is used.
+        auto & postFiltersForVar = postFilters[varsAndProperties.begin()->first];
+        postFiltersForVar.insert(postFiltersForVar.end(), expressions.begin(), expressions.end());
+      }
+      else if(varsAndProperties.begin()->second.count(idProperty))
+      {
+        // only id properties are used
+        for(const auto & [var, _] : varsAndProperties)
+          varsWithIDFiltering.insert(var);
+        idFilters.insert(idFilters.end(), expressions.begin(), expressions.end());
+      }
+      else
+        throw std::logic_error("[Unexpected] A filter expression has no property.");
+    }
+    else
+      throw std::logic_error("[Unexpected] A filter expression has no variable.");
+  }
+  
   const std::string relatedNodeID = (traversalDirection == TraversalDirection::Forward) ? "OriginID" : "DestinationID";
   const std::string relatedDualNodeID = (traversalDirection == TraversalDirection::Backward) ? "OriginID" : "DestinationID";
+
+  std::map<Variable, std::map<PropertyKeyName, std::string>> propertyMappingCypherToSQL;
+  if(nodeVar)
+    propertyMappingCypherToSQL[*nodeVar][idProperty] = relatedNodeID;
+  if(dualNodeVar)
+    propertyMappingCypherToSQL[*dualNodeVar][idProperty] = relatedDualNodeID;
+  if(relVar)
+    propertyMappingCypherToSQL[*relVar][idProperty] = "relationships.SYS__ID";
 
   const std::optional<std::vector<size_t>> nodeTypesFilter = nodeLabelsStr.empty() ?
     std::nullopt : std::optional{labelsToTypeIndices(Element::Node, nodeLabelsStr)};
@@ -554,9 +563,11 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   const std::optional<std::vector<size_t>> relTypesFilter = relLabelsStr.empty() ?
     std::nullopt : std::optional{labelsToTypeIndices(Element::Relationship, relLabelsStr)};
 
-  const bool withDualNodesInfo = dualNodeTypesFilter.has_value() || !propertiesDualNode.empty() || !dualNodeFilterIDs.empty() || !dualNodeFilterPost.empty();
+  // No need to take into account varsWithIDFiltering here.
+  const bool withDualNodesInfo = dualNodeTypesFilter.has_value() || !propertiesDualNode.empty() || (dualNodeVar && postFilters.count(*dualNodeVar));
   
-  const bool withNodeInfo = nodeTypesFilter.has_value() || !propertiesNode.empty() || !nodeFilterIDs.empty() || !nodeFilterPost.empty();
+  // No need to take into account varsWithIDFiltering here.
+  const bool withNodeInfo = nodeTypesFilter.has_value() || !propertiesNode.empty() || (nodeVar && postFilters.count(*nodeVar));
   if(!withNodeInfo)
     throw std::logic_error("Unexpected, maybe you should use forEachElementPropertyWithLabelsIn");
 
@@ -571,7 +582,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
 
   CallersRows callerRows;
 
-  // Do not insert elements that are filtered by
+  // Filter relationships based on
   // - nodeLabelsStr
   // - relLabelsStr
   // - dualNodeLabelsStr
@@ -615,22 +626,25 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
         s << " WHERE ";
       }
     };
-    auto tryFilterIDs = [&](const std::vector<const Expression*>& filterIDs, std::string const& idAlias)
+    
+    if(!idFilters.empty())
     {
-      if(!filterIDs.empty())
+      std::string sqlFilter;
+      if(!toEquivalentSQLFilter(idFilters, {idProperty}, propertyMappingCypherToSQL, sqlFilter))
+        throw std::logic_error("Should never happen: expressions in *FilterIDs are all equi-property with property m_idProperty");
+      if(!sqlFilter.empty())
       {
-        std::unordered_map<std::string, std::string> propertyMap;
-        propertyMap[m_idProperty] = idAlias;
-        std::string sqlFilter;
-        if(!toEquivalentSQLFilter(filterIDs, {m_idProperty}, propertyMap, sqlFilter))
-          throw std::logic_error("Should never happen: expressions in *FilterIDs are all equi-property with property m_idProperty");
-        if(!sqlFilter.empty())
-        {
-          addWhereTerm();
-          s << "( " << sqlFilter << " )";
-        }
+        addWhereTerm();
+        s << "( " << sqlFilter << " )";
       }
-    };
+    }
+    
+    if(nodeVar && dualNodeVar && (*nodeVar == *dualNodeVar))
+    {
+      addWhereTerm();
+      s << "( " << relatedDualNodeID << " = " << relatedNodeID << " )";
+    }
+    
     auto tryFilterTypes = [&](const std::optional<std::vector<size_t>>& typesFilter, std::string const& typeAlias)
     {
       if(typesFilter.has_value())
@@ -653,10 +667,6 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     tryFilterTypes(relTypesFilter, "RelationshipType");
     tryFilterTypes(nodeTypesFilter, "nodes.NodeType");
     tryFilterTypes(dualNodeTypesFilter, "dualNodes.NodeType");
-
-    tryFilterIDs(relFilterIDs, "relationships.SYS__ID");
-    tryFilterIDs(nodeFilterIDs, relatedNodeID);
-    tryFilterIDs(dualNodeFilterIDs, relatedDualNodeID);
 
     const std::string req = s.str();
 
@@ -698,26 +708,33 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   // Get needed property values of nodes, dual nodes and relationships
   //   and filter.
 
-  std::vector<std::string> strPropertiesNode;
+  std::vector<PropertyKeyName> strPropertiesNode;
   for(const auto & rct : propertiesNode)
     strPropertiesNode.push_back(rct.propertyName);
 
-  std::vector<std::string> strPropertiesDualNode;
+  std::vector<PropertyKeyName> strPropertiesDualNode;
   for(const auto & rct : propertiesDualNode)
     strPropertiesDualNode.push_back(rct.propertyName);
 
-  std::vector<std::string> strPropertiesRel;
+  std::vector<PropertyKeyName> strPropertiesRel;
   for(const auto & rct : propertiesRel)
     strPropertiesRel.push_back(rct.propertyName);
 
-  auto gatherPropertyValues = [this](const auto& elemsByType,
+  auto gatherPropertyValues = [this, &postFilters](const Variable* var,
+                                     const auto& elemsByType,
                                      const Element elem,
-                                     const std::vector<std::string>& strProperties,
-                                     const std::vector<const Expression*>& filterPost,
+                                     const std::vector<PropertyKeyName>& strProperties,
                                      std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties)
   {
     bool firstOutter = true;
     std::ostringstream s;
+
+    std::vector<const Expression*>* postFilterForVar{};
+
+    if(var)
+      if(const auto it = postFilters.find(*var); it != postFilters.end())
+        postFilterForVar = &it->second;
+
     for(const auto & [type, ids] : elemsByType)
     {
       const auto label = (elem == Element::Node)
@@ -729,8 +746,8 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
         // label does not exist.
         continue;
       std::string sqlFilter{};
-      if(!filterPost.empty())
-        if(!toEquivalentSQLFilter(filterPost, m_properties[label], {}, sqlFilter))
+      if(postFilterForVar && !postFilterForVar->empty())
+        if(!toEquivalentSQLFilter(*postFilterForVar, m_properties[label], {}, sqlFilter))
           // These items are excluded by the filter.
           continue;
       bool hasValidProperty{};
@@ -800,9 +817,9 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
 
-  gatherPropertyValues(nodesByTypes, Element::Node, strPropertiesNode, nodeFilterPost, nodeProperties);
-  gatherPropertyValues(dualNodesByTypes, Element::Node, strPropertiesDualNode, dualNodeFilterPost, dualNodeProperties);
-  gatherPropertyValues(relsByTypes, Element::Relationship, strPropertiesRel, relFilterPost, relProperties);
+  gatherPropertyValues(nodeVar, nodesByTypes, Element::Node, strPropertiesNode, nodeProperties);
+  gatherPropertyValues(dualNodeVar, dualNodesByTypes, Element::Node, strPropertiesDualNode, dualNodeProperties);
+  gatherPropertyValues(relVar, relsByTypes, Element::Relationship, strPropertiesRel, relProperties);
 
   // Return results according to callerRows
 
@@ -869,7 +886,7 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Element elem,
                                             FuncResults& f)
 {
   // extract property names
-  std::vector<std::string> propertyNames;
+  std::vector<PropertyKeyName> propertyNames;
   propertyNames.reserve(returnClauseTerms.size());
   for(const auto & rct : returnClauseTerms)
     propertyNames.push_back(rct.propertyName);

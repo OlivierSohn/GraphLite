@@ -9,6 +9,8 @@ int main()
 {
   struct PrettyPrintQueryResults
   {
+    bool printCypherAST() const { return false; }
+
     void onCypherQueryStarts(std::string const & cypherQuery)
     {
       std::cout << std::endl;
@@ -78,18 +80,29 @@ int main()
   
   GraphDB db(onSQLQuery, onDBDiagnosticContent);
 
+  auto mkProperty = [](std::string const & name){
+    using openCypher::PropertyKeyName;
+    using openCypher::SymbolicName;
+    return PropertyKeyName{SymbolicName{name}};
+  };
+
+  const auto p_test = mkProperty("test");
+  const auto p_what = mkProperty("what");
+  const auto p_testRel = mkProperty("testRel");
+  const auto p_whatRel = mkProperty("whatRel");
+
   {
     LogIndentScope _ = logScope(std::cout, "Creating Entity and Relationship types...");
-    db.addType("Node1", true, {"test"});
-    db.addType("Node2", true, {"test", "what"});
-    db.addType("Rel1", false, {"testRel", "whatRel"});
-    db.addType("Rel2", false, {"testRel", "whatRel"});
+    db.addType("Node1", true, {p_test});
+    db.addType("Node2", true, {p_test, p_what});
+    db.addType("Rel1", false, {p_testRel, p_whatRel});
+    db.addType("Rel2", false, {p_testRel, p_whatRel});
   }
   LogIndentScope sER = logScope(std::cout, "Creating Entities and Relationships...");
-  auto n1 = db.addNode("Node1", {{"test", "3"}});
-  auto n2 = db.addNode("Node2", {{"test", "4"}, {"what", "55"}});
-  auto r12 = db.addRelationship("Rel1", n1, n2, {{"whatRel", ".44"}});
-  auto r22 = db.addRelationship("Rel2", n2, n2, {{"testRel", ".1"}, {"whatRel", ".55"}});
+  auto n1 = db.addNode("Node1", {{p_test, "3"}});
+  auto n2 = db.addNode("Node2", {{p_test, "4"}, {p_what, "55"}});
+  auto r12 = db.addRelationship("Rel1", n1, n2, {{p_whatRel, ".44"}});
+  auto r22 = db.addRelationship("Rel2", n2, n2, {{p_testRel, ".1"}, {p_whatRel, ".55"}});
   sER.endScope();
 
   //db.writeToDisk();

@@ -10,25 +10,6 @@
 namespace sql
 {
 
-namespace detail
-{
-// Note that in general this function is not safe as it could lead to ambiguities if
-// an expression has a property name that matches with a value of |propertyMap|.
-//
-// However, in practice we use this function only on expressions that are equi-property
-// (i.e are using a single property), and with a |propertyMap| containing a single
-// key/value pair where the key is "the" property used by the equi-property expression.
-// In this case, the ambiguity described above doesn't exist.
-inline const std::string& resolveProperty(const std::unordered_map<std::string, std::string>& propertyMap, const std::string& property)
-{
-  const auto it = propertyMap.find(property);
-  if(it == propertyMap.end())
-    return property;
-  return it->second;
-}
-
-} // NS
-
 enum class Comparison
 {
   EQ, // =
@@ -67,7 +48,7 @@ struct Expression
 
   virtual std::optional<Evaluation> tryEvaluate() = 0;
   
-  virtual void toString(const std::unordered_map<std::string, std::string>& propertyMap, std::ostream& os) const = 0;
+  virtual void toString(std::ostream& os) const = 0;
 };
 
 struct Literal : public Expression
@@ -76,7 +57,7 @@ struct Literal : public Expression
   : str(str)
   {}
   std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
-  void toString(const std::unordered_map<std::string, std::string>& propertyMap, std::ostream& os) const override { os << str; }
+  void toString(std::ostream& os) const override { os << str; }
 
   std::string str;
 };
@@ -86,9 +67,9 @@ struct Field : public Expression
   : str(str)
   {}
   std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
-  void toString(const std::unordered_map<std::string, std::string>& propertyMap, std::ostream& os) const override
+  void toString(std::ostream& os) const override
   {
-    os << detail::resolveProperty(propertyMap, str);
+    os << str;
   }
 
   std::string str;
@@ -98,7 +79,7 @@ struct Field : public Expression
 struct Null : public Expression
 {
   std::optional<Evaluation> tryEvaluate() override { return Evaluation::Unknown; }
-  void toString(const std::unordered_map<std::string, std::string>& propertyMap, std::ostream& os) const override { os << "NULL"; }
+  void toString(std::ostream& os) const override { os << "NULL"; }
 };
 
 struct ComparisonExpression : public Expression {
@@ -135,13 +116,13 @@ struct ComparisonExpression : public Expression {
     return std::nullopt;
   }
 
-  void toString(const std::unordered_map<std::string, std::string>& propertyMap, std::ostream& os) const override
+  void toString(std::ostream& os) const override
   {
-    m_left->toString(propertyMap, os);
+    m_left->toString(os);
     os << " ";
     os << toStr(m_comp);
     os << " ";
-    m_right->toString(propertyMap, os);
+    m_right->toString(os);
   }
 
 private:
@@ -240,7 +221,7 @@ struct AggregateExpression : public Expression
     throw std::logic_error("invalid enum value");
   }
 
-  void toString(const std::unordered_map<std::string, std::string>& propertyMap, std::ostream& os) const override {
+  void toString(std::ostream& os) const override {
     bool first = true;
     for(const auto & subExpr : m_subExprs)
     {
@@ -249,7 +230,7 @@ struct AggregateExpression : public Expression
       else
         os << toStr(m_aggregator);
       os << " (";
-      subExpr->toString(propertyMap, os);
+      subExpr->toString(os);
       os << ") ";
     }
   }

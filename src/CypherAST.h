@@ -6,6 +6,8 @@
 #include <vector>
 #include <optional>
 #include <unordered_set>
+#include <set>
+#include <map>
 #include <any>
 
 #include "SqlAST.h"
@@ -19,11 +21,34 @@ using Comparison = sql::Comparison;
 struct SymbolicName
 {
   std::string str;
+
+  friend bool operator<(const SymbolicName&a, const SymbolicName&b)
+  {
+    return a.str < b.str;
+  }
+  friend bool operator==(const SymbolicName&a, const SymbolicName&b)
+  {
+    return a.str == b.str;
+  }
 };
+inline std::ostream& operator<<(std::ostream& os, const SymbolicName& p)
+{
+  os << p.str;
+  return os;
+}
 
 struct Variable
 {
   SymbolicName symbolicName;
+  
+  friend bool operator<(const Variable&a, const Variable&b)
+  {
+    return a.symbolicName < b.symbolicName;
+  }
+  friend bool operator==(const Variable&a, const Variable&b)
+  {
+    return a.symbolicName == b.symbolicName;
+  }
 };
 
 struct SchemaName
@@ -99,7 +124,46 @@ struct Literal
 struct PropertyKeyName
 {
   SymbolicName symbolicName;
+
+  friend bool operator<(const PropertyKeyName&a, const PropertyKeyName&b)
+  {
+    return a.symbolicName < b.symbolicName;
+  }
+  friend bool operator==(const PropertyKeyName&a, const PropertyKeyName&b)
+  {
+    return a.symbolicName == b.symbolicName;
+  }
 };
+
+inline std::ostream& operator<<(std::ostream& os, const PropertyKeyName& p)
+{
+  os << p.symbolicName;
+  return os;
+}
+
+using VarsAndProperties = std::map<Variable, std::set<PropertyKeyName>>;
+
+inline void merge(VarsAndProperties&& v, VarsAndProperties& res)
+{
+  if(res.empty())
+    res = std::move(v);
+  else
+  {
+    for(auto& [var, properties] : v)
+    {
+      auto & props = res[var];
+      if(props.empty())
+        props = std::move(properties);
+      else
+        for(const auto& prop : properties)
+          props.insert(prop);
+    }
+  }
+}
+
+struct Expression;
+
+using ExpressionsByVarAndProperties = std::map<VarsAndProperties, std::vector<const Expression*>>;
 
 // Definitions for terms used in comments:
 //
@@ -128,27 +192,46 @@ struct Expression
   
   virtual std::unique_ptr<Expression> StealAsPtr() = 0;
     
-  // If "the expression tree is equi-var, or the expression tree is an AND-aggregation of equi-var subtrees",
-  //   equi-var subtrees are returned in |res|.
-  // Otherwise, an exception is thrown.
-  virtual void asAndEquiVarSubTrees(std::unordered_map<std::string /*variable*/, std::vector<const Expression*>>& res) const = 0;
-  
-  // If the expression tree is equi-var,
-  //   returns the corresponding variable
-  // Else throws an exception
-  virtual std::string asEquiVarTree() const = 0;
-
-  // Precondition: the caller has verified that the Expression is equi-var,
-  //   i.e calling asEquiVarTree() doesn't throw.
+  // Returns |exprs| containing expressions grouped by used variables and properties.
   //
-  // If the expression tree is equi-property,
-  //   returns the corresponding variable
-  // Else throws an exception
-  virtual std::string asEquiPropertyTree() const = 0;
+  // The Expression is equivalent to an And-aggregation of all expressions in |exprs|.
+  //
+  // Expressions in |exprs| are the deepest possible i.e we traverse successive
+  // consecutive AND-aggregations from the top of the tree
+  // to return the expressions of the deepest possible AND-aggregation.
+  //
+  // For example, in the expression
+  //
+  // ((1 OR 2 OR 3)  AND  (7 AND 8))  AND  (11 OR 12)
+  //
+  //   which corresponds to the expression tree
+  //
+  //                9(AND)
+  //        ----------------------
+  //      5(AND)               10(OR)
+  //    ---------              -----
+  //  4(OR)    6(AND)          11  12
+  // -------   -------
+  // 1  2  3   7     8
+  //
+  // we will return expressions 4, 7, 8, 10
+  //
+  // And if the exact expression is:
+  //
+  // ((a.style=3 OR a.style=5 OR a.type=50)  AND  (r.length<10 AND b.weight > 30))  AND  (a.type=100 OR b.type=100)
+  //
+  // 4, 7, 8 are equi-var expressions, 10 is not an equi-var expression:
+  // - 10 uses variables 'a' (with property 'type'), and variable 'b' (with property 'type')
+  // - 4 uses variable 'a' (with properties 'style' and 'type')
+  // - 7 uses variable 'r' (with property 'length')
+  // - 8 uses variable 'b' (with property 'weight')
+  virtual void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const = 0;
 
+  virtual VarsAndProperties varsAndProperties() const = 0;
   // throws if the translation is not supported yet.
   virtual std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::unordered_set<std::string>& sqlFields) const = 0;
+  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const = 0;
 };
 
 // This helper class wraps the std::vector<std::unique_ptr<Expression>> in a shared_ptr
@@ -218,74 +301,56 @@ struct AggregateExpression : public Expression
   }
   const std::vector<std::unique_ptr<Expression>>& subExpressions() const { return m_subExprs.get(); }
 
-  void asAndEquiVarSubTrees(std::unordered_map<std::string /*variable*/, std::vector<const Expression*>>& res) const override
+  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
   {
-    if(m_aggregator == Aggregator::XOR)
+    switch(m_aggregator)
     {
-      // SQL doesn't have XOR but we could transform the tree using this equivalency:
-      //   a XOR b === (a OR b) AND NOT(a AND b)
-      // Once the tree is transformed, if all subexpressions are equivar with the same var,
-      // the tree will be equivar.
-      throw std::logic_error("Xor is not AndEquiVarSubTrees");
+      case Aggregator::XOR:
+        // SQL doesn't have XOR but we could transform the tree using this equivalency:
+        //   a XOR b === (a OR b) AND NOT(a AND b)
+        // Once the tree is transformed, if all subexpressions are equivar with the same var,
+        // the tree will be equivar.
+        throw std::logic_error("Xor is not supported");
+        break;
+      case Aggregator::OR:
+        exprs[varsAndProperties()].push_back(this);
+        break;
+      case Aggregator::AND:
+        for(const auto & exp: subExpressions())
+        {
+          // if exp is an AND aggregation, we recursively call this function on sub-expressions
+          if(auto * aggr = dynamic_cast<const AggregateExpression*>(exp.get()))
+          {
+            if(aggr->aggregator() == Aggregator::AND)
+            {
+              for(const auto & subExpr : aggr->subExpressions())
+                subExpr->asMaximalANDAggregation(exprs);
+              continue;
+            }
+          }
+          exprs[exp->varsAndProperties()].push_back(exp.get());
+        }
+        break;
     }
+  }
 
+  VarsAndProperties varsAndProperties() const override
+  {
+    VarsAndProperties res;
     for(const auto & exp: subExpressions())
-      res[exp->asEquiVarTree()].push_back(exp.get());
-    
-    if(m_aggregator == Aggregator::OR)
     {
-      if(res.size() == 1)
-        // all sub expressions have the same variable, so we return ourselves instead.
-        res.begin()->second = std::vector<const Expression*>{this};
-      else
-        throw std::logic_error("Or with different vars is not AndEquiVarSubTrees");
+      merge(exp->varsAndProperties(), res);
     }
-  }
-
-  std::string asEquiVarTree() const override
-  {
-    std::optional<std::string> var;
-    for(const auto & expr : subExpressions())
-    {
-      const std::string var2 = expr->asEquiVarTree();
-      if(var.has_value())
-      {
-        if(*var != var2)
-          throw std::logic_error("not equi var");
-      }
-      else
-        var = var2;
-    }
-    if(!var.has_value())
-      throw std::logic_error("no subexpression found");
-    return *var;
-  }
-
-  std::string asEquiPropertyTree() const override
-  {
-    std::optional<std::string> prop;
-    for(const auto & expr : subExpressions())
-    {
-      const std::string prop2 = expr->asEquiPropertyTree();
-      if(prop.has_value())
-      {
-        if(*prop != prop2)
-          throw std::logic_error("not equi prop");
-      }
-      else
-        prop = prop2;
-    }
-    if(!prop.has_value())
-      throw std::logic_error("no subexpression found");
-    return *prop;
+    return res;
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::unordered_set<std::string>& sqlFields) const override
+  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     std::vector<std::unique_ptr<sql::Expression>> sqlSubExprs;
     for(auto const & exp : m_subExprs.get())
-      sqlSubExprs.push_back(exp->toSQLExpressionTree(sqlFields));
+      sqlSubExprs.push_back(exp->toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL));
     return std::make_unique<sql::AggregateExpression>(toSqlAggregator(aggregator()), std::move(sqlSubExprs));
   }
 
@@ -321,52 +386,32 @@ struct NonArithmeticOperatorExpression : public Expression
     return ptr;
   };
   
-  void asAndEquiVarSubTrees(std::unordered_map<std::string /*variable*/, std::vector<const Expression*>>& res) const override
+  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
   {
-    throw std::logic_error("NonArithmeticOperatorExpression cannot be used as a root of a WHERE expression (?)");
-  }
-  std::string asEquiVarTree() const override
-  {
-    return std::visit([&](auto && arg) -> std::string {
-      using T = std::decay_t<decltype(arg)>;
-      if constexpr (std::is_same_v<T, Variable>)
-      {
-        if(!mayPropertyName.has_value())
-          // in equi-var trees, all nodes must use _properties_ of the same variable.
-          throw std::logic_error("no property");
-        return arg.symbolicName.str;
-      }
-      else if constexpr (std::is_same_v<T, Literal>)
-      {
-        throw std::logic_error("literal");
-      }
-      else if constexpr (std::is_same_v<T, AggregateExpression>)
-      {
-        return arg.asEquiVarTree();
-      }
-      else
-        static_assert(c_false<T>, "non-exhaustive visitor!");
-    }, atom.var);
+    // Probably a logic error, the owner of the NonArithmeticOperatorExpression should implement
+    // asMaximalANDAggregation differently.
+    throw std::logic_error("asMaximalANDAggregation not implemented for NonArithmeticOperatorExpression");
   }
 
-  std::string asEquiPropertyTree() const override
+  VarsAndProperties varsAndProperties() const override
   {
-    return std::visit([&](auto && arg) -> std::string {
+    return std::visit([&](auto && arg) -> VarsAndProperties {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, Variable>)
       {
-        if(!mayPropertyName.has_value())
-          // in equi-var trees, all nodes must use _properties_ of the same variable.
-          throw std::logic_error("no property");
-        return mayPropertyName->symbolicName.str;
+        VarsAndProperties res;
+        auto & props = res[arg];
+        if(mayPropertyName.has_value())
+          props.insert(*mayPropertyName);
+        return res;
       }
       else if constexpr (std::is_same_v<T, Literal>)
       {
-        throw std::logic_error("literal");
+        return {};
       }
       else if constexpr (std::is_same_v<T, AggregateExpression>)
       {
-        return arg.asEquiPropertyTree();
+        return arg.varsAndProperties();
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
@@ -374,7 +419,8 @@ struct NonArithmeticOperatorExpression : public Expression
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::unordered_set<std::string>& sqlFields) const override
+  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     return std::visit([&](auto && arg) -> std::unique_ptr<sql::Expression> {
       using T = std::decay_t<decltype(arg)>;
@@ -382,12 +428,18 @@ struct NonArithmeticOperatorExpression : public Expression
       {
         if(!mayPropertyName.has_value())
           throw std::logic_error("cannot use a raw variable in SQL, need to have a property");
-        if(0 == sqlFields.count(mayPropertyName->symbolicName.str))
+        if(0 == sqlFields.count(*mayPropertyName))
           // The property is not a SQL field so we return a null node.
           return std::make_unique<sql::Null>();
         else
-          // The property is a SQL field so we return it as-is.
+        {
+          // The property is a SQL field so we return it.
+          
+          if(const auto it = propertyMappingCypherToSQL.find(arg); it != propertyMappingCypherToSQL.end())
+            if(const auto it2 = it->second.find(*mayPropertyName); it2 != it->second.end())
+              return std::make_unique<sql::Field>(it2->second);
           return std::make_unique<sql::Field>(mayPropertyName->symbolicName.str);
+        }
       }
       else if constexpr (std::is_same_v<T, Literal>)
       {
@@ -397,7 +449,7 @@ struct NonArithmeticOperatorExpression : public Expression
       }
       else if constexpr (std::is_same_v<T, AggregateExpression>)
       {
-        return arg.toSQLExpressionTree(sqlFields);
+        return arg.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
@@ -423,49 +475,21 @@ struct ComparisonExpression : public Expression {
     return ptr;
   };
 
-  void asAndEquiVarSubTrees(std::unordered_map<std::string /*variable*/, std::vector<const Expression*>>& res) const override
+  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
   {
-    res[asEquiVarTree()].push_back(this);
+    exprs[varsAndProperties()].push_back(this);
   }
-  std::string asEquiVarTree() const override
+  VarsAndProperties varsAndProperties() const override
   {
-    const std::string varLeft = leftExp.asEquiVarTree();
-    bool ok = true;
-    try
-    {
-      const std::string varRight = partial.rightExp.asEquiVarTree();
-      if(varRight != varLeft)
-        ok = false;
-    }
-    catch(std::exception &)
-    {
-      // means the right part is a Literal.
-    }
-    if(!ok)
-      throw std::logic_error("ComparisonExpression: Right and Left variables are different");
-    return varLeft;
-  }
-  std::string asEquiPropertyTree() const override
-  {
-    const std::string propLeft = leftExp.asEquiPropertyTree();
-    bool ok = true;
-    try
-    {
-      const std::string propRight = partial.rightExp.asEquiPropertyTree();
-      if(propRight != propLeft)
-        ok = false;
-    }
-    catch(std::exception &)
-    {
-      // means the right part is a Literal.
-    }
-    if(!ok)
-      throw std::logic_error("ComparisonExpression: Right and Left properties are different");
-    return propLeft;
+    VarsAndProperties left = leftExp.varsAndProperties();
+    VarsAndProperties right = partial.rightExp.varsAndProperties();
+    merge(std::move(right), left);
+    return left;
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::unordered_set<std::string>& sqlFields) const override
+  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     // At this point we can have these cases:
     //
@@ -479,8 +503,8 @@ struct ComparisonExpression : public Expression {
     // node = otherNode
     // node = 1
 
-    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields);
-    std::unique_ptr<sql::Expression> right = partial.rightExp.toSQLExpressionTree(sqlFields);
+    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
+    std::unique_ptr<sql::Expression> right = partial.rightExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
     return std::make_unique<sql::ComparisonExpression>(std::move(left), partial.comp, std::move(right));
   }
 };

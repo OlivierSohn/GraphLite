@@ -33,10 +33,10 @@ SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& q
 }
 
 
-std::unordered_map<std::string, std::vector<ReturnClauseTerm>>
+std::map<Variable, std::vector<ReturnClauseTerm>>
 extractProperties(const std::vector<NonArithmeticOperatorExpression>& naoExps)
 {
-  std::unordered_map<std::string, std::vector<ReturnClauseTerm>> props;
+  std::map<Variable, std::vector<ReturnClauseTerm>> props;
   size_t i{};
   for(const auto & nao : naoExps)
   {
@@ -45,9 +45,9 @@ extractProperties(const std::vector<NonArithmeticOperatorExpression>& naoExps)
       throw std::logic_error("Not Implemented (todo return 'entire node'?)");
     // TODO support Literal in return clauses.
     const auto & var = std::get<Variable>(nao.atom.var);
-    auto & elem = props[var.symbolicName.str].emplace_back();
+    auto & elem = props[var].emplace_back();
     elem.returnClausePosition = i;
-    elem.propertyName = mayPropertyName->symbolicName.str;
+    elem.propertyName = *mayPropertyName;
     ++i;
   }
   return props;
@@ -90,28 +90,34 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   if(mpp.mayVariable.has_value())
     throw std::logic_error("Not Implemented (Expected no variable before match pattern)");
   
-  std::unordered_map<
-  std::string /*node or dualNode or rel*/,
-  std::vector<const Expression*> /* expressions of the vector are ANDed*/>
-  whereTermsByVar;
+  ExpressionsByVarAndProperties whereExprsByVarsAndproperties;
   
   if(spq.mayReadingClause->match.where.has_value())
     // If the tree is not Equi-var, an exception is thrown.
     // todo: support non-Equi-var trees (i.e: WHERE n.weight > 3 OR r.status = 2)
-    spq.mayReadingClause->match.where->exp->asAndEquiVarSubTrees(whereTermsByVar);
+    spq.mayReadingClause->match.where->exp->asMaximalANDAggregation(whereExprsByVarsAndproperties);
   
   const auto & app = mpp.anonymousPatternPart;
   
-  const std::unordered_map<std::string, std::vector<ReturnClauseTerm>> props =
+  const std::map<Variable, std::vector<ReturnClauseTerm>> props =
   extractProperties(spq.returnClause.naoExps);
   
   // TODO make the code of forEachNodeAndRelatedRelationship more generic/symmetrical
   //   s.t we don't need to detect which pattern is active here.
   auto nodePatternIsActive = [&](const NodePattern& np)
   {
-    if(np.mayVariable.has_value() && (props.count(np.mayVariable->symbolicName.str) || whereTermsByVar.count(np.mayVariable->symbolicName.str)))
-      // the node pattern has a variable AND this variable is used in the return clause or in the where clause.
-      return true;
+    if(np.mayVariable.has_value())
+    {
+      // return true if the node pattern has a variable AND this variable
+      // is used in the return clause or in the where clause.
+      if(props.count(*np.mayVariable))
+        return true;
+      for(const auto & [varAndProperties, _] : whereExprsByVarsAndproperties)
+        for(const auto & [var, _] : varAndProperties)
+          if(var == *np.mayVariable)
+            return true;
+    }
+    // return true if there are associated labels constraints.
     return !np.labels.labels.empty();
   };
   
@@ -155,63 +161,52 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
     std::vector<ReturnClauseTerm> propertiesDualNode;
     
     if(nodeVariable.has_value())
-      if(auto it = props.find(nodeVariable->symbolicName.str); it != props.end())
+      if(auto it = props.find(*nodeVariable); it != props.end())
         propertiesNode = it->second;
     if(relVariable.has_value())
-      if(auto it = props.find(relVariable->symbolicName.str); it != props.end())
+      if(auto it = props.find(*relVariable); it != props.end())
         propertiesRel = it->second;
     if(dualNodeVariable.has_value())
-      if(auto it = props.find(dualNodeVariable->symbolicName.str); it != props.end())
+      if(auto it = props.find(*dualNodeVariable); it != props.end())
         propertiesDualNode = it->second;
     
     {
       // Sanity check.
       
-      std::unordered_set<std::string> allVariables;
+      std::set<Variable> allVariables;
       if(nodeVariable.has_value())
-        allVariables.insert(nodeVariable->symbolicName.str);
+        allVariables.insert(*nodeVariable);
       if(relVariable.has_value())
-        allVariables.insert(relVariable->symbolicName.str);
+        allVariables.insert(*relVariable);
       if(dualNodeVariable.has_value())
-        allVariables.insert(dualNodeVariable->symbolicName.str);
+        allVariables.insert(*dualNodeVariable);
       
       for(const auto & [varName, _] : props)
         if(0 == allVariables.count(varName))
-          throw std::logic_error("Variable '" + varName + "' used in the return clause was not defined.");
+          throw std::logic_error("A variable used in the return clause was not defined.");
       
-      for(const auto &[varName, _]: whereTermsByVar)
-        if(0 == allVariables.count(varName))
-          throw std::logic_error("Variable '" + varName + "' used in the where clause was not defined.");
+      for(const auto& [varAndProperties, _]: whereExprsByVarsAndproperties)
+        for(const auto& [var, _]: varAndProperties)
+          if(0 == allVariables.count(var))
+            throw std::logic_error("A variable used in the where clause was not defined.");
     }
     
-    const std::vector<const Expression*> * nodeFilter{};
-    const std::vector<const Expression*> * relFilter{};
-    const std::vector<const Expression*> * dualNodeFilter{};
-    if(nodeVariable.has_value())
-      if(const auto it = whereTermsByVar.find(nodeVariable->symbolicName.str); it != whereTermsByVar.end())
-        nodeFilter = &it->second;
-    if(relVariable.has_value())
-      if(const auto it = whereTermsByVar.find(relVariable->symbolicName.str); it != whereTermsByVar.end())
-        relFilter = &it->second;
-    if(dualNodeVariable.has_value())
-      if(const auto it = whereTermsByVar.find(dualNodeVariable->symbolicName.str); it != whereTermsByVar.end())
-        dualNodeFilter = &it->second;
-    
-    variablesNames.push_back(nodeVariable->symbolicName.str);
-    variablesNames.push_back(relVariable->symbolicName.str);
-    variablesNames.push_back(dualNodeVariable->symbolicName.str);
+    variablesNames.push_back(nodeVariable.has_value() ? nodeVariable->symbolicName.str : "");
+    variablesNames.push_back(relVariable.has_value() ? relVariable->symbolicName.str : "");
+    variablesNames.push_back(dualNodeVariable.has_value() ? dualNodeVariable->symbolicName.str : "");
     
     const TraversalDirection traversalDirection = app.patternElementChains[0].relPattern.traversalDirection;
     db.forEachNodeAndRelatedRelationship(leftNodeVarIsActive ? traversalDirection : mirror(traversalDirection),
+                                         nodeVariable.has_value() ? &*nodeVariable : nullptr,
+                                         relVariable.has_value() ? &*relVariable : nullptr,
+                                         dualNodeVariable.has_value() ? &*dualNodeVariable : nullptr,
                                          propertiesNode,
                                          propertiesRel,
                                          propertiesDualNode,
                                          asStringVec(nodeLabels),
                                          asStringVec(relLabels),
                                          asStringVec(dualNodeLabels),
-                                         nodeFilter,
-                                         relFilter,
-                                         dualNodeFilter,
+                                         whereExprsByVarsAndproperties,
                                          f);
     return;
   }
@@ -244,30 +239,29 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   if(spq.returnClause.naoExps.empty())
     throw std::logic_error("Not Implemented (Expected some non arithmetic expression)");
   
-  const auto itProps = props.find(variable.symbolicName.str);
+  const auto itProps = props.find(variable);
   std::vector<ReturnClauseTerm> properties;
   if(itProps != props.end())
     properties = itProps->second;
-  for(const auto & [varName, _] : props)
-    if(varName != variable.symbolicName.str)
-      throw std::logic_error("Variable '" + varName + "' not found.");
+  for(const auto & [var, _] : props)
+    if(var != variable)
+      throw std::logic_error("A variable used in the return clause was not defined.");
   
-  for(const auto & [varName, constraint] : whereTermsByVar)
-    if(varName != variable.symbolicName.str)
-      throw std::logic_error("Variable '" + varName + "' not found.");
+  std::vector<const Expression*> filter;
+  for(const auto& [varAndProperties, exprs]: whereExprsByVarsAndproperties)
+  {
+    for(const auto& [var, _]: varAndProperties)
+      if(var != variable)
+        throw std::logic_error("A variable used in the where clause was not defined.");
+    filter.insert(filter.end(), exprs.begin(), exprs.end());
+  }
   
   const std::vector<std::string> labelsStr = asStringVec(labels);
   
-  {
-    auto it = whereTermsByVar.find(variable.symbolicName.str);
-    const std::vector<const Expression*>* filter{};
-    if(it != whereTermsByVar.end())
-      filter = &it->second;
-    db.forEachElementPropertyWithLabelsIn(elem,
-                                          properties,
-                                          labelsStr,
-                                          filter,
-                                          f);
-  }
+  db.forEachElementPropertyWithLabelsIn(elem,
+                                        properties,
+                                        labelsStr,
+                                        &filter,
+                                        f);
 }
 } // NS
