@@ -1016,8 +1016,7 @@ std::any MyCypherVisitor::visitOC_SymbolicName(CypherParser::OC_SymbolicNameCont
   auto _ = scope("SymbolicName");
   if(auto unescapedSymbolicName = context->UnescapedSymbolicName())
   {
-    std::string str = unescapedSymbolicName->getText();
-    return SymbolicName{std::move(str)};
+    return SymbolicName{unescapedSymbolicName->getText()};
   }
   else if(auto escapedSymbolicName = context->EscapedSymbolicName())
   {
@@ -1025,10 +1024,12 @@ std::any MyCypherVisitor::visitOC_SymbolicName(CypherParser::OC_SymbolicNameCont
     str = trim('`', std::move(str));
     return SymbolicName{std::move(str)};
   }
-  else
+  else if(auto hexLetter = context->HexLetter())
   {
-    m_errors.push_back("unhandled type of OC_SymbolicName");
+    return SymbolicName{hexLetter->getText()};
   }
+  else
+    m_errors.push_back("unhandled type of OC_SymbolicName");
   return {};
 }
 

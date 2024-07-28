@@ -133,7 +133,6 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
     if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
       throw std::logic_error(sqlite3_errstr(res));
   }
-
 }
 
 GraphDB::~GraphDB()

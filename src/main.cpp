@@ -9,7 +9,7 @@ int main()
 {
   struct PrettyPrintQueryResults
   {
-    PrettyPrintQueryResults(std::string const & cypherQuery)
+    void onCypherQueryStarts(std::string const & cypherQuery)
     {
       std::cout << std::endl;
       std::cout << "[openCypher] " << cypherQuery << std::endl;
@@ -29,7 +29,11 @@ int main()
         std::cout << m_variablesNames[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
       std::cout << std::endl;
     }
-    
+    void onCypherQueryEnds()
+    {
+      m_logIndentScope.reset();
+    }
+
   private:
     std::unique_ptr<LogIndentScope> m_logIndentScope;
     GraphDB::ResultOrder m_resultOrder;
@@ -96,7 +100,8 @@ int main()
 
   auto runCypher = [&](const std::string &cypherQuery)
   {
-    openCypher::runCypher<PrettyPrintQueryResults>(cypherQuery, db);
+    PrettyPrintQueryResults ppHandler;
+    openCypher::runCypher(cypherQuery, db, ppHandler);
   };
 
   try

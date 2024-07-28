@@ -7,7 +7,7 @@
 
 namespace openCypher::detail
 {
-SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& query)
+SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& query, const bool printAST)
 {
   auto chars = antlr4::ANTLRInputStream(query);
   auto lexer = CypherLexer(&chars);
@@ -16,15 +16,15 @@ SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& q
   //parser.setBuildParseTree(true);
   CypherParser::OC_CypherContext* cypherTree = parser.oC_Cypher();
   
-  bool printAST = true;
   auto visitor = MyCypherVisitor(idProperty, printAST);
   auto resVisit = visitor.visit(cypherTree);
   
   if(!visitor.getErrors().empty())
   {
+    std::ostringstream s;
     for(const auto& err : visitor.getErrors())
-      std::cerr << err << std::endl;
-    throw std::logic_error("Visitor errored.");
+      s << "  " << err << std::endl;
+    throw std::logic_error("Visitor errors:\n" + s.str());
   }
   
   if(resVisit.type() != typeid(SingleQuery))

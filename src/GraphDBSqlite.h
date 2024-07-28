@@ -132,8 +132,8 @@ private:
   // key : namedType.
   std::unordered_map<std::string, std::unordered_set<std::string>> m_properties;
   
-  const FuncOnSQLQuery& m_fOnSQLQuery;
-  const FuncOnDBDiagnosticContent& m_fOnDiagnostic;
+  const FuncOnSQLQuery m_fOnSQLQuery;
+  const FuncOnDBDiagnosticContent m_fOnDiagnostic;
 
   std::vector<std::string> computeLabels(const Element, const std::vector<std::string>& inputLabels) const;
   std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
