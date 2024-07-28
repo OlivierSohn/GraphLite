@@ -70,30 +70,39 @@ struct DB
   using Expression = openCypher::Expression;
   using TraversalDirection = openCypher::TraversalDirection;
   
-  DB(bool printSQLRequests);
+  // Contains information to order results in the same order as they were specified in the return clause.
+  using ResultOrder = std::vector<std::pair<
+  unsigned /* i = index into VecValues, VecColumnNames*/,
+  unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
+  
+  using VecColumnNames = std::vector<const std::vector<std::string>*>;
+  using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
+  
+  using FuncResults = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
+  
+  using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
+  using FuncOnDBDiagnosticContent = std::function<void(int argc, char **argv, char **column)>;
+
+  DB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic);
   ~DB();
   
   // Creates a sql table.
   // todo support typed properties.
-  void addType(std::string const& typeName, bool isNode, std::vector<std::string> const& properties);
+  void addType(std::string const& typeName,
+               bool isNode,
+               std::vector<std::string> const& properties);
   
-  ID addNode(const std::string& type, const std::vector<std::pair<std::string, std::string>>& propValues);
-  ID addRelationship(const std::string& type, const ID& originEntity, const ID& destinationEntity, const std::vector<std::pair<std::string, std::string>>& propValues);
+  ID addNode(const std::string& type,
+             const std::vector<std::pair<std::string, std::string>>& propValues);
+  ID addRelationship(const std::string& type,
+                     const ID& originEntity,
+                     const ID& destinationEntity,
+                     const std::vector<std::pair<std::string, std::string>>& propValues);
   
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.
   std::string const & idProperty() const { return m_idProperty; }
-    
-  // Contains information to order results in the same order as they were specified in the return clause.
-  using ResultOrder = std::vector<std::pair<
-    unsigned /* i = index into VecValues, VecColumnNames*/,
-    unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
 
-  using VecColumnNames = std::vector<const std::vector<std::string>*>;
-  using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
-
-  using FuncResults = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
-  
   // |labels| is the list of possible labels. When empty, all labels are allowed.
   void forEachElementPropertyWithLabelsIn(const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
@@ -116,15 +125,16 @@ struct DB
   void print();
 private:
   std::string m_idProperty{"SYS__ID"};
-  
-  bool m_printSQLRequests;
-  
+
   sqlite3* m_db{};
   IndexedTypes<size_t> m_indexedNodeTypes;
   IndexedTypes<size_t> m_indexedRelationshipTypes;
   // key : namedType.
   std::unordered_map<std::string, std::unordered_set<std::string>> m_properties;
   
+  const FuncOnSQLQuery& m_fOnSQLQuery;
+  const FuncOnDBDiagnosticContent& m_fOnDiagnostic;
+
   std::vector<std::string> computeLabels(const Element, const std::vector<std::string>& inputLabels) const;
   std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
   
@@ -134,10 +144,10 @@ private:
   [[nodiscard]]
   bool findValidProperties(const std::string& typeName, const std::vector<std::string>& propNames, std::vector<bool>& valid) const;
   
-  void addElement(const std::string& typeName, const ID& id, const std::vector<std::pair<std::string, std::string>>& propValues);
-  
-  void printReq(const std::string& req) const;
-  
+  void addElement(const std::string& typeName,
+                  const ID& id,
+                  const std::vector<std::pair<std::string, std::string>>& propValues);
+    
   void splitIDsFilters(const std::vector<const Expression*>* allFilters,
                        std::vector<const Expression*>& IDsFilters,
                        std::vector<const Expression*>& PostFilters) const;

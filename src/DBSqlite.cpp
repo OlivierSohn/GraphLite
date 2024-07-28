@@ -27,17 +27,9 @@ struct hash<IDAndType>
 };
 }
 
-int cbPrint(void *a_param, int argc, char **argv, char **column){
-  auto _ = LogIndentScope{};
-  std::cout << LogIndent{};
-  for (int i=0; i< argc; i++)
-    printf("%s,\t", argv[i]);
-  printf("\n");
-  return 0;
-}
-
-DB::DB(bool printSQLRequests)
-: m_printSQLRequests(printSQLRequests)
+DB::DB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic)
+: m_fOnSQLQuery(fOnSQLQuery)
+, m_fOnDiagnostic(fOnDiagnostic)
 {
   LogIndentScope _ = logScope(std::cout, "Creating System tables...");
 
@@ -52,7 +44,7 @@ DB::DB(bool printSQLRequests)
     std::string typeName = "nodes";
     {
       const std::string req = "DROP TABLE " + typeName + ";";
-      printReq(req);
+      m_fOnSQLQuery(req);
       // ignore error
       auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
     }
@@ -65,13 +57,13 @@ DB::DB(bool printSQLRequests)
       }
       s << ");";
       const std::string req = s.str();
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
       const std::string req = "CREATE INDEX NodeTypeIndex ON " + typeName + "(NodeType);";
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
@@ -81,7 +73,7 @@ DB::DB(bool printSQLRequests)
     std::string typeName = "relationships";
     {
       const std::string req = "DROP TABLE " + typeName + ";";
-      printReq(req);
+      m_fOnSQLQuery(req);
       // ignore error
       auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
     }
@@ -96,25 +88,25 @@ DB::DB(bool printSQLRequests)
       }
       s << ");";
       const std::string req = s.str();
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
       const std::string req = "CREATE INDEX RelationshipTypeIndex ON " + typeName + "(RelationshipType);";
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
       const std::string req = "CREATE INDEX originIDIndex ON " + typeName + "(OriginID);";
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
       const std::string req = "CREATE INDEX destinationIDIndex ON " + typeName + "(DestinationID);";
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
@@ -124,7 +116,7 @@ DB::DB(bool printSQLRequests)
     std::string typeName = "namedTypes";
     {
       const std::string req = "DROP TABLE " + typeName + ";";
-      printReq(req);
+      m_fOnSQLQuery(req);
       // ignore error
       auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
     }
@@ -137,7 +129,7 @@ DB::DB(bool printSQLRequests)
     }
     s << ");";
     const std::string req = s.str();
-    printReq(req);
+    m_fOnSQLQuery(req);
     if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
       throw std::logic_error(sqlite3_errstr(res));
   }
@@ -153,7 +145,7 @@ void DB::addType(const std::string &typeName, bool isNode, const std::vector<std
 {
   {
     const std::string req = "DROP TABLE " + typeName + ";";
-    printReq(req);
+    m_fOnSQLQuery(req);
     // ignore error
     auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
   }
@@ -167,7 +159,7 @@ void DB::addType(const std::string &typeName, bool isNode, const std::vector<std
     }
     s << ");";
     const std::string req = s.str();
-    printReq(req);
+    m_fOnSQLQuery(req);
     if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
       throw std::logic_error(sqlite3_errstr(res));
   }
@@ -179,7 +171,7 @@ void DB::addType(const std::string &typeName, bool isNode, const std::vector<std
     << (isNode ? "E" : "R")
     << "') RETURNING TypeIdx";
     const std::string req = s.str();
-    printReq(req);
+    m_fOnSQLQuery(req);
     size_t typeIdx{std::numeric_limits<size_t>::max()};
     char* msg{};
     if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_typeIdx, int argc, char **argv, char **column) {
@@ -242,7 +234,8 @@ bool DB::findValidProperties(const std::string& typeName,
 }
 
 
-ID DB::addNode(const std::string& typeName, const std::vector<std::pair<std::string, std::string>>& propValues)
+ID DB::addNode(const std::string& typeName,
+               const std::vector<std::pair<std::string, std::string>>& propValues)
 {
   const auto typeIdx = m_indexedNodeTypes.getIfExists(typeName);
   if(!typeIdx.has_value())
@@ -253,7 +246,7 @@ ID DB::addNode(const std::string& typeName, const std::vector<std::pair<std::str
     std::ostringstream s;
     s << "INSERT INTO nodes (NodeType) Values(" << *typeIdx << ") RETURNING " << m_idProperty;
     const std::string req = s.str();
-    printReq(req);
+    m_fOnSQLQuery(req);
     if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_nodeId, int argc, char **argv, char **column) {
       auto & nodeId = *static_cast<std::string*>(p_nodeId);
       for (int i=0; i< argc; i++)
@@ -270,7 +263,10 @@ ID DB::addNode(const std::string& typeName, const std::vector<std::pair<std::str
 }
 
 // There is a system table to generate relationship ids.
-ID DB::addRelationship(const std::string& typeName, const ID& originEntity, const ID& destinationEntity, const std::vector<std::pair<std::string, std::string>>& propValues)
+ID DB::addRelationship(const std::string& typeName,
+                       const ID& originEntity,
+                       const ID& destinationEntity,
+                       const std::vector<std::pair<std::string, std::string>>& propValues)
 {
   const auto typeIdx = m_indexedRelationshipTypes.getIfExists(typeName);
   if(!typeIdx.has_value())
@@ -291,7 +287,7 @@ ID DB::addRelationship(const std::string& typeName, const ID& originEntity, cons
       }
       s << ")";
       const std::string req = s.str();
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_countMatches, int argc, char **argv, char **column) {
         auto & countMatches = *static_cast<size_t*>(p_countMatches);
         ++countMatches;
@@ -312,7 +308,7 @@ ID DB::addRelationship(const std::string& typeName, const ID& originEntity, cons
     << ", " << destinationEntity
     <<") RETURNING " << m_idProperty;
     const std::string req = s.str();
-    printReq(req);
+    m_fOnSQLQuery(req);
     if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_relId, int argc, char **argv, char **column) {
       auto & relId = *static_cast<std::string*>(p_relId);
       for (int i=0; i< argc; i++)
@@ -327,7 +323,9 @@ ID DB::addRelationship(const std::string& typeName, const ID& originEntity, cons
   return relId;
 }
 
-void DB::addElement(const std::string& typeName, const ID& id, const std::vector<std::pair<std::string, std::string>>& propValues)
+void DB::addElement(const std::string& typeName,
+                    const ID& id,
+                    const std::vector<std::pair<std::string, std::string>>& propValues)
 {
   std::vector<std::string> propertyNames;
   std::vector<std::string> propertyValues;
@@ -343,8 +341,8 @@ void DB::addElement(const std::string& typeName, const ID& id, const std::vector
     s << ", " << propertyValue;
   s << ");";
   const std::string req = s.str();
-  printReq(req);
-  if(auto res = sqlite3_exec(m_db, req.c_str(), cbPrint, 0, 0))
+  m_fOnSQLQuery(req);
+  if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
     throw std::logic_error(sqlite3_errstr(res));
 }
 
@@ -366,18 +364,24 @@ void DB::print()
       std::ostringstream s;
       s << "SELECT * FROM " << name;
       const std::string req = s.str();
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(),
-                                 cbPrint, 0, 0))
+                                 [](void *p_This, int argc, char **argv, char **column) {
+        static_cast<DB*>(p_This)->m_fOnDiagnostic(argc, argv, column);
+        return 0;
+      }, this, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
       std::ostringstream s;
       s << "PRAGMA table_info('" << name << "')";
       const std::string req = s.str();
-      printReq(req);
+      m_fOnSQLQuery(req);
       if(auto res = sqlite3_exec(m_db, req.c_str(),
-                                 cbPrint, 0, 0))
+                                 [](void *p_This, int argc, char **argv, char **column) {
+        static_cast<DB*>(p_This)->m_fOnDiagnostic(argc, argv, column);
+        return 0;
+      }, this, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
   }
@@ -661,7 +665,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
 
     const std::string req = s.str();
 
-    printReq(req);
+    m_fOnSQLQuery(req);
     char*msg{};
     if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_callerRows, int argc, char **argv, char **column) {
       auto & callerRows = *static_cast<CallersRows*>(p_callerRows);
@@ -711,11 +715,11 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   for(const auto & rct : propertiesRel)
     strPropertiesRel.push_back(rct.propertyName);
 
-  auto buildQuery = [this](const auto& elemsByType,
-                           const Element elem,
-                           const std::vector<std::string>& strProperties,
-                           const std::vector<const Expression*>& filterPost,
-                           std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties)
+  auto gatherPropertyValues = [this](const auto& elemsByType,
+                                     const Element elem,
+                                     const std::vector<std::string>& strProperties,
+                                     const std::vector<const Expression*>& filterPost,
+                                     std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties)
   {
     bool firstOutter = true;
     std::ostringstream s;
@@ -778,64 +782,32 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
       if(!sqlFilter.empty())
         s << " AND " << sqlFilter;
     }
-    return s.str();
+
+    const std::string queryStr = s.str();
+    if(!queryStr.empty())
+    {
+      m_fOnSQLQuery(queryStr);
+      if(auto res = sqlite3_exec(m_db, queryStr.c_str(), [](void *p_properties, int argc, char **argv, char **column) {
+        auto & properties = *static_cast<std::unordered_map<ID, std::vector<std::optional<std::string>>>*>(p_properties);
+        auto & props = properties[argv[0]];
+        for(int i=1; i<argc; ++i)
+        {
+          auto * arg = argv[i];
+          props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
+        }
+        return 0;
+      }, &properties, 0))
+        throw std::logic_error(sqlite3_errstr(res));
+    }
   };
 
   std::unordered_map<ID, std::vector<std::optional<std::string>>> nodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
 
-  auto nodesQuery = buildQuery(nodesByTypes, Element::Node, strPropertiesNode, nodeFilterPost, nodeProperties);
-  auto dualNodesQuery = buildQuery(dualNodesByTypes, Element::Node, strPropertiesDualNode, dualNodeFilterPost, dualNodeProperties);
-  auto relsQuery = buildQuery(relsByTypes, Element::Relationship, strPropertiesRel, relFilterPost, relProperties);
-
-  if(!nodesQuery.empty())
-  {
-    printReq(nodesQuery);
-    if(auto res = sqlite3_exec(m_db, nodesQuery.c_str(), [](void *p_nodeProperties, int argc, char **argv, char **column) {
-      auto & nodeProperties = *static_cast<std::unordered_map<ID, std::vector<std::optional<std::string>>>*>(p_nodeProperties);
-      auto & props = nodeProperties[argv[0]];
-      for(int i=1; i<argc; ++i)
-      {
-        auto * arg = argv[i];
-        props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
-      }
-      return 0;
-    }, &nodeProperties, 0))
-      throw std::logic_error(sqlite3_errstr(res));
-  }
-
-  if(!dualNodesQuery.empty())
-  {
-    printReq(dualNodesQuery);
-    if(auto res = sqlite3_exec(m_db, dualNodesQuery.c_str(), [](void *p_dualNodeProperties, int argc, char **argv, char **column) {
-      auto & dualNodeProperties = *static_cast<std::unordered_map<ID, std::vector<std::optional<std::string>>>*>(p_dualNodeProperties);
-      auto & props = dualNodeProperties[argv[0]];
-      for(int i=1; i<argc; ++i)
-      {
-        auto * arg = argv[i];
-        props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
-      }
-      return 0;
-    }, &dualNodeProperties, 0))
-      throw std::logic_error(sqlite3_errstr(res));
-  }
-  
-  if(!relsQuery.empty())
-  {
-    printReq(relsQuery);
-    if(auto res = sqlite3_exec(m_db, relsQuery.c_str(), [](void *p_relProperties, int argc, char **argv, char **column) {
-      auto & relProperties = *static_cast<std::unordered_map<ID, std::vector<std::optional<std::string>>>*>(p_relProperties);
-      auto & props = relProperties[argv[0]];
-      for(int i=1; i<argc; ++i)
-      {
-        auto * arg = argv[i];
-        props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
-      }
-      return 0;
-    }, &relProperties, 0))
-      throw std::logic_error(sqlite3_errstr(res));
-  }
+  gatherPropertyValues(nodesByTypes, Element::Node, strPropertiesNode, nodeFilterPost, nodeProperties);
+  gatherPropertyValues(dualNodesByTypes, Element::Node, strPropertiesDualNode, dualNodeFilterPost, dualNodeProperties);
+  gatherPropertyValues(relsByTypes, Element::Relationship, strPropertiesRel, relFilterPost, relProperties);
 
   // Return results according to callerRows
 
@@ -970,7 +942,7 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
   const std::string req = s.str();
   if(!req.empty())
   {
-    printReq(req);
+    m_fOnSQLQuery(req);
     char*msg{};
     if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_results, int argc, char **argv, char **column) {
       auto & results = *static_cast<Results*>(p_results);
@@ -1009,26 +981,4 @@ auto DB::computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm
   }
   
   return resultOrder;
-}
-
-
-void DB::printReq(const std::string& req) const
-{
-  if(m_printSQLRequests)
-  {
-    bool first = true;
-    for(const auto & part1 : splitOn("UNION ALL ", req))
-      for(const auto & part : splitOn("INNER JOIN ", part1))
-      {
-        std::cout << LogIndent{};
-        if(first)
-        {
-          first = false;
-          std::cout << "[SQL] ";
-        }
-        else
-          std::cout << "      ";
-        std::cout << part << std::endl;
-      }
-  }
 }

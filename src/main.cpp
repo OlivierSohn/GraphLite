@@ -281,6 +281,12 @@ void runSingleQuery(const SingleQuery& q, DB& db, const FOnOrderAndColumnNames& 
 
 struct PrettyPrintQueryResults
 {
+  PrettyPrintQueryResults(std::string const & cypherQuery)
+  {
+    std::cout << std::endl;
+    std::cout << "[openCypher] " << cypherQuery << std::endl;
+    m_logIndentScope = std::make_unique<LogIndentScope>();
+  }
   void onOrderAndColumnNames(const DB::ResultOrder& ro, const std::vector<std::string>& varNames, const DB::VecColumnNames& colNames) {
     m_resultOrder = ro;
     m_variablesNames = varNames;
@@ -297,20 +303,18 @@ struct PrettyPrintQueryResults
   }
 
 private:
+  std::unique_ptr<LogIndentScope> m_logIndentScope;
   DB::ResultOrder m_resultOrder;
   std::vector<std::string> m_variablesNames;
   DB::VecColumnNames m_columnNames;
 };
 
 template<typename ResultsHander = PrettyPrintQueryResults>
-void runCypher(const std::string& cyperQuery, DB&db)
+void runCypher(const std::string& cypherQuery, DB&db)
 {
-  const auto ast = cypherQueryToAST(db.idProperty(), cyperQuery);
-  std::cout << std::endl;
-  std::cout << "[openCypher] " << cyperQuery << std::endl;
-  const auto _ = LogIndentScope{};
+  const auto ast = cypherQueryToAST(db.idProperty(), cypherQuery);
 
-  ResultsHander resultsHandler;
+  ResultsHander resultsHandler(cypherQuery);
   
   runSingleQuery(ast, db,
                  [&](const DB::ResultOrder& ro, const std::vector<std::string>& varNames, const DB::VecColumnNames& colNames)
@@ -325,8 +329,40 @@ int main()
   using openCypher::runCypher;
 
   const bool printSQLRequests{true};
+  auto onSQLQuery = [&](const std::string& req)
+  {
+    if(printSQLRequests)
+    {
+      bool first = true;
+      for(const auto & part1 : splitOn("UNION ALL ", req))
+        for(const auto & part : splitOn("INNER JOIN ", part1))
+        {
+          std::cout << LogIndent{};
+          if(first)
+          {
+            first = false;
+            std::cout << "[SQL] ";
+          }
+          else
+            std::cout << "      ";
+          std::cout << part << std::endl;
+        }
+    }
+  };
+  auto onDBDiagnosticContent = [](int argc, char **argv, char **column)
+  {
+    if(printSQLRequests)
+    {
+      auto _ = LogIndentScope{};
+      std::cout << LogIndent{};
+      for (int i=0; i < argc; i++)
+        printf("%s,\t", argv[i]);
+      printf("\n");
+    }
+    return 0;
+  };
 
-  DB db(printSQLRequests);
+  DB db(onSQLQuery, onDBDiagnosticContent);
 
   {
     LogIndentScope _ = logScope(std::cout, "Creating Entity and Relationship types...");
