@@ -4,6 +4,8 @@ An attempt to create a simple graph DB, in C++.
 
 # Notes
 
+To install antlr:
+
 ```
 brew install antlr
 brew install antlr4-cpp-runtime
