@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <numeric>
 
 
 struct IDAndType
@@ -579,7 +580,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   // Filter on ids of rel, node, dualnode when possible.
   // For cases like this:
   // #  id(n) in <IDS> AND n.weight > 3 AND n.weight < 10
-  // we know that we can filter on IDS, but in this case:
+  // we know that we can filter on IDS (and this is what we do in this function), but in this case:
   // #  id(n) in <IDS> OR n.weight > 3
   // filtering on IDS would filter too much because some nodes with n.weight > 3 may not have their ids in IDS.
   // To handle this case we could run queries against non-system node tables to gather ids for which n.weight > 3
@@ -603,6 +604,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
     s << " INNER JOIN nodes ON nodes.SYS__ID = relationships." << relatedNodeID;
     if(withDualNodesInfo)
       s << " INNER JOIN nodes dualNodes ON dualNodes.SYS__ID = relationships." << relatedDualNodeID;
+
     bool hasWhere{};
     auto addWhereTerm = [&]()
     {
@@ -614,7 +616,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
         s << " WHERE ";
       }
     };
-    auto tryAddIDsFiltering = [&](const std::vector<const Expression*>& filterIDs, std::string const& idAlias)
+    auto tryFilterIDs = [&](const std::vector<const Expression*>& filterIDs, std::string const& idAlias)
     {
       if(!filterIDs.empty())
       {
@@ -630,54 +632,32 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
         }
       }
     };
-    if(relTypesFilter.has_value())
+    auto tryFilterTypes = [&](const std::optional<std::vector<size_t>>& typesFilter, std::string const& typeAlias)
     {
-      addWhereTerm();
-      s << " RelationshipType IN (";
-      bool first = true;
-      for(const auto typeIdx : *relTypesFilter)
+      if(typesFilter.has_value())
       {
-        if(first)
-          first = false;
-        else
-          s << ",";
-        s << typeIdx;
+        addWhereTerm();
+        s << " " << typeAlias << " IN (";
+        bool first = true;
+        for(const auto typeIdx : *typesFilter)
+        {
+          if(first)
+            first = false;
+          else
+            s << ",";
+          s << typeIdx;
+        }
+        s << ")";
       }
-      s << ")";
-    }
-    if(nodeTypesFilter.has_value())
-    {
-      addWhereTerm();
-      s << " nodes.NodeType IN (";
-      bool first = true;
-      for(const auto typeIdx : *nodeTypesFilter)
-      {
-        if(first)
-          first = false;
-        else
-          s << ",";
-        s << typeIdx;
-      }
-      s << ")";
-    }
-    if(dualNodeTypesFilter.has_value())
-    {
-      addWhereTerm();
-      s << " dualNodes.NodeType IN (";
-      bool first = true;
-      for(const auto typeIdx : *dualNodeTypesFilter)
-      {
-        if(first)
-          first = false;
-        else
-          s << ",";
-        s << typeIdx;
-      }
-      s << ")";
-    }
-    tryAddIDsFiltering(nodeFilterIDs, relatedNodeID);
-    tryAddIDsFiltering(dualNodeFilterIDs, relatedDualNodeID);
-    tryAddIDsFiltering(relFilterIDs, "relationships.SYS__ID");
+    };
+
+    tryFilterTypes(relTypesFilter, "RelationshipType");
+    tryFilterTypes(nodeTypesFilter, "nodes.NodeType");
+    tryFilterTypes(dualNodeTypesFilter, "dualNodes.NodeType");
+
+    tryFilterIDs(relFilterIDs, "relationships.SYS__ID");
+    tryFilterIDs(nodeFilterIDs, relatedNodeID);
+    tryFilterIDs(dualNodeFilterIDs, relatedDualNodeID);
 
     const std::string req = s.str();
 
@@ -859,27 +839,79 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
 
   // Return results according to callerRows
 
+  // vecValues[i=0] will point to an element of nodeProperties
+  // vecValues[i=1] will point to an element of relProperties
+  // vecValues[i=2] will point to an element of dualNodeProperties
+  VecValues vecValues;
+  
+  VecColumnNames vecColumnNames;
+
+  vecColumnNames.push_back(&strPropertiesNode);
+  vecColumnNames.push_back(&strPropertiesRel);
+  vecColumnNames.push_back(&strPropertiesDualNode);
+
+  std::vector<const std::vector<ReturnClauseTerm>*> vecReturnClauses;
+  
+  vecReturnClauses.push_back(&propertiesNode);
+  vecReturnClauses.push_back(&propertiesRel);
+  vecReturnClauses.push_back(&propertiesDualNode);
+
+  vecValues.resize(vecReturnClauses.size());
+
+  // Will contain information to present the results in the same order as they were specified in the return clause.
+  ResultOrder resultOrder;
+  {
+    const size_t resultsSize = std::accumulate(vecReturnClauses.begin(),
+                                               vecReturnClauses.end(),
+                                               0ull,
+                                               [](const size_t acc, const std::vector<ReturnClauseTerm>* pVecReturnClauseTerms)
+                                               {
+      return acc + pVecReturnClauseTerms->size();
+    });
+    
+    resultOrder.resize(resultsSize);
+    
+    for(size_t i=0, szI = vecReturnClauses.size(); i<szI; ++i)
+    {
+      const auto & properties = *vecReturnClauses[i];
+      for(size_t j=0, szJ = properties.size(); j<szJ; ++j)
+      {
+        const auto& p = properties[j];
+        resultOrder[p.returnClausePosition] = {i, j};
+      }
+    }
+  }
+
+  const auto emptyVec = std::vector<std::optional<std::string>>{};
+  for(auto & v : vecValues)
+    v = &emptyVec;
+
   for(const auto & [nodeIdAndType, dualNodeAndRelsIDsAndTypes] : callerRows)
   {
     const auto itNodeProperties = nodeProperties.find(nodeIdAndType.id);
     if(itNodeProperties == nodeProperties.end())
       continue;
+    vecValues[0] = &itNodeProperties->second;
     for(const auto & [dualNodeIdAndType, relsIDsAndTypes] : dualNodeAndRelsIDsAndTypes)
     {
       const auto itDualNodeProperties = dualNodeProperties.find(dualNodeIdAndType.id);
-      if(withDualNodesInfo && (itDualNodeProperties == dualNodeProperties.end()))
-        continue;
+      if(withDualNodesInfo)
+      {
+        if (itDualNodeProperties == dualNodeProperties.end())
+          continue;
+        else
+          vecValues[2] = &itDualNodeProperties->second;
+      }
       for(const auto & relIDAndType : relsIDsAndTypes)
       {
         const auto itRelProperties = relProperties.find(relIDAndType.id);
         if(itRelProperties == relProperties.end())
           continue;
-        f(itNodeProperties->second,
-          itRelProperties->second,
-          (!withDualNodesInfo) ? std::vector<std::optional<std::string>>{} : itDualNodeProperties->second,
-          strPropertiesNode,
-          strPropertiesRel,
-          strPropertiesDualNode);
+        vecValues[1] = &itRelProperties->second;
+        
+        f(resultOrder,
+          vecColumnNames,
+          vecValues);
       }
     }
   }

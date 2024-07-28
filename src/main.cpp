@@ -182,23 +182,20 @@ void runSingleQuery(const SingleQuery& q, DB& db)
       if(const auto it = whereTermsByVar.find(dualNodeVariable->symbolicName.str); it != whereTermsByVar.end())
         dualNodeFilter = &it->second;
     
+    std::vector<std::string> variablesNames;
+
+    variablesNames.push_back(nodeVariable->symbolicName.str);
+    variablesNames.push_back(relVariable->symbolicName.str);
+    variablesNames.push_back(dualNodeVariable->symbolicName.str);
+
     {
-      auto f = std::function{[&](const std::vector<std::optional<std::string>>& nodePropertiesValues,
-                                 const std::vector<std::optional<std::string>>& relationshipPropertiesValues,
-                                 const std::vector<std::optional<std::string>>& dualNodePropertiesValues,
-                                 const std::vector<std::string>& nodePropertiesNames,
-                                 const std::vector<std::string>& relationshipPropertiesNames,
-                                 const std::vector<std::string>& dualNodePropertiesNames){
+      auto f = std::function{[&](const DB::ResultOrder& resultOrder,
+                                 const DB::VecColumnNames& columnNames,
+                                 const DB::VecValues& values){
         auto _ = LogIndentScope();
         std::cout << LogIndent{};
-        // Slightly more work would be needed if we want to honor the order of items
-        // specified in the return clause.
-        for(size_t i=0, sz=nodePropertiesValues.size(); i<sz; ++i)
-          std::cout << nodeVariable->symbolicName.str << "." << nodePropertiesNames[i] << " = " << (nodePropertiesValues[i].value_or("<null>")) << '|';
-        for(size_t i=0, sz=relationshipPropertiesValues.size(); i<sz; ++i)
-          std::cout << relVariable->symbolicName.str << "." << relationshipPropertiesNames[i] << " = " << (relationshipPropertiesValues[i].value_or("<null>")) << '|';
-        for(size_t i=0, sz=dualNodePropertiesValues.size(); i<sz; ++i)
-          std::cout << dualNodeVariable->symbolicName.str << "." << dualNodePropertiesNames[i] << " = " << (dualNodePropertiesValues[i].value_or("<null>")) << '|';
+        for(const auto & [i, j] : resultOrder)
+          std::cout << variablesNames[i] << "." << (*columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
         std::cout << std::endl;
       }};
       const TraversalDirection traversalDirection = app.patternElementChains[0].relPattern.traversalDirection;
@@ -362,7 +359,7 @@ int main()
     runCypher("MATCH (`n`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) OR n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`;", db);
 
     runCypher("MATCH (`n`)-[r]-(`m`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) AND n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`, id(m), id(r);", db);
-
+    
     // todo write some unit tests
     
     // todo write some performance tests

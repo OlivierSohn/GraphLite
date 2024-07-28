@@ -95,12 +95,13 @@ struct DB
   
   using FuncProp = std::function<void(int argc, char **argv, char **column)>;
   
-  using FuncProp2 = std::function<void(const std::vector<std::optional<std::string>>& nodeProperties,
-                                       const std::vector<std::optional<std::string>>& relationshipProperties,
-                                       const std::vector<std::optional<std::string>>& dualNodeProperties,
-                                       const std::vector<std::string>& nodePropertiesNames,
-                                       const std::vector<std::string>& relationshipPropertiesNames,
-                                       const std::vector<std::string>& dualNodePropertiesNames)>;
+  using ResultOrder = std::vector<std::pair<
+    unsigned /* i = index into VecValues, VecColumnNames*/,
+    unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
+  using VecColumnNames = std::vector<const std::vector<std::string>*>;
+  using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
+
+  using FuncProp2 = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
   
   // |labels| is the list of possible labels. When empty, all labels are allowed.
   void forEachElementPropertyWithLabelsIn(const Element,
