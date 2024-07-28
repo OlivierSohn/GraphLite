@@ -235,6 +235,7 @@ bool DB::findValidProperties(const std::string& typeName,
   auto it = m_properties.find(typeName);
   if(it == m_properties.end())
     return false;
+  valid.reserve(propNames.size());
   for(const auto& name : propNames)
     valid.push_back(it->second.count(name) > 0);
   return true;
@@ -522,12 +523,11 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
                                            const std::vector<const Expression*>* nodeFilterAll,
                                            const std::vector<const Expression*>* relFilterAll,
                                            const std::vector<const Expression*>* dualNodeFilterAll,
-                                           FuncProp2&f)
+                                           FuncResults&f)
 {
   if(traversalDirection == TraversalDirection::Any)
   {
-    // Todo: optimize the count of queries by doing a special case.
-    // We can traverse the system relationships table once only.
+    // Todo: Divide the count of queries by 2 with a special case.
     for(const auto td : {TraversalDirection::Forward, TraversalDirection::Backward})
       forEachNodeAndRelatedRelationship(td, propertiesNode, propertiesRel, propertiesDualNode, nodeLabelsStr, relLabelsStr, dualNodeLabelsStr,
                                         nodeFilterAll, relFilterAll, dualNodeFilterAll, f);
@@ -858,29 +858,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
 
   vecValues.resize(vecReturnClauses.size());
 
-  // Will contain information to present the results in the same order as they were specified in the return clause.
-  ResultOrder resultOrder;
-  {
-    const size_t resultsSize = std::accumulate(vecReturnClauses.begin(),
-                                               vecReturnClauses.end(),
-                                               0ull,
-                                               [](const size_t acc, const std::vector<ReturnClauseTerm>* pVecReturnClauseTerms)
-                                               {
-      return acc + pVecReturnClauseTerms->size();
-    });
-    
-    resultOrder.resize(resultsSize);
-    
-    for(size_t i=0, szI = vecReturnClauses.size(); i<szI; ++i)
-    {
-      const auto & properties = *vecReturnClauses[i];
-      for(size_t j=0, szJ = properties.size(); j<szJ; ++j)
-      {
-        const auto& p = properties[j];
-        resultOrder[p.returnClausePosition] = {i, j};
-      }
-    }
-  }
+  const ResultOrder resultOrder = computeResultOrder(vecReturnClauses);
 
   const auto emptyVec = std::vector<std::optional<std::string>>{};
   for(auto & v : vecValues)
@@ -921,17 +899,34 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
                                             const std::vector<ReturnClauseTerm>& returnClauseTerms,
                                             const std::vector<std::string>& inputLabels,
                                             const std::vector<const Expression*>* filter,
-                                            FuncProp& f)
+                                            FuncResults& f)
 {
-  // extract property names and verify they are in ascending order.
+  // extract property names
   std::vector<std::string> propertyNames;
-  for(size_t i=0, sz=returnClauseTerms.size(); i<sz; ++i)
-  {
-    if(returnClauseTerms[i].returnClausePosition != i)
-      // else we need to change how we print the properties.
-      throw std::logic_error("This function assumes return clauses are ordered.");
-    propertyNames.push_back(returnClauseTerms[i].propertyName);
-  }
+  propertyNames.reserve(returnClauseTerms.size());
+  for(const auto & rct : returnClauseTerms)
+    propertyNames.push_back(rct.propertyName);
+  
+  struct Results{
+    Results(ResultOrder&&ro, VecColumnNames&& vecColumnNames, const FuncResults& func)
+    : m_resultsOrder(std::move(ro))
+    , m_vecColumnNames(std::move(vecColumnNames))
+    , m_f(func)
+    , m_vecValues{&m_values}
+    {
+      m_values.resize(m_vecColumnNames[0]->size());
+    }
+
+    const ResultOrder m_resultsOrder;
+    const VecColumnNames m_vecColumnNames;
+    std::vector<std::optional<std::string>> m_values;
+    const FuncResults& m_f;
+    const std::vector<const std::vector<std::optional<std::string>>*> m_vecValues;
+  } results {
+    computeResultOrder({&returnClauseTerms}),
+    {&propertyNames},
+    f
+  };
   
   std::vector<bool> validProperty;
   std::ostringstream s;
@@ -977,13 +972,43 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
   {
     printReq(req);
     char*msg{};
-    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_f, int argc, char **argv, char **column) {
-      auto & f = *static_cast<FuncProp*>(p_f);
-      f(argc, argv, column);
+    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_results, int argc, char **argv, char **column) {
+      auto & results = *static_cast<Results*>(p_results);
+      for(int i=0; i<argc; ++i)
+      {
+        auto * arg = argv[i];
+        results.m_values[i] = arg ? std::optional{std::string{arg}} : std::nullopt;
+      }
+      results.m_f(results.m_resultsOrder, results.m_vecColumnNames, results.m_vecValues);
       return 0;
-    }, &f, &msg))
+    }, &results, &msg))
       throw std::logic_error(msg);
   }
+}
+
+auto DB::computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses) -> ResultOrder
+{
+  const size_t resultsSize = std::accumulate(vecReturnClauses.begin(),
+                                             vecReturnClauses.end(),
+                                             0ull,
+                                             [](const size_t acc, const std::vector<ReturnClauseTerm>* pVecReturnClauseTerms)
+                                             {
+    return acc + pVecReturnClauseTerms->size();
+  });
+  
+  ResultOrder resultOrder(resultsSize);
+  
+  for(size_t i=0, szI = vecReturnClauses.size(); i<szI; ++i)
+  {
+    const auto & properties = *vecReturnClauses[i];
+    for(size_t j=0, szJ = properties.size(); j<szJ; ++j)
+    {
+      const auto& p = properties[j];
+      resultOrder[p.returnClausePosition] = {i, j};
+    }
+  }
+  
+  return resultOrder;
 }
 
 

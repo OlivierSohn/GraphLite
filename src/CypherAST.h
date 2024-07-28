@@ -104,10 +104,24 @@ struct PropertyKeyName
 // Definitions for terms used in comments:
 //
 // # Equi-var
-// All nodes of an "Equi-var" (sub-)tree use properties of the _same_ variable.
+// All nodes of an "Equi-var" expression tree use properties of the _same_ variable.
 //
 // # Equi-property
-// All nodes of an "Equi-property" (sub-)tree use the _same_ property of the _same_ variable.
+// All nodes of an "Equi-property" expression tree use the _same_ property of the _same_ variable.
+
+// Note on supported where clauses:
+//
+// The where clause for the (a)-[r]-(b) pattern match can be expressed in this form:
+//   (A) <term applying only to properties and label of 'a'> AND
+//   (B) <term applying only to properties and label of 'b'> AND
+//   (C) <term applying only to properties and label of 'r'> AND
+//   (D) <term applying to properties and label of multiple items, i.e for example 'a' and 'b'>
+//
+// Currently, we only handle where clauses containing (A), (B), (C), but not (D).
+// This is why we needed to define the notion of "equi-var" expression tree:
+//   supported where clauses are "equi-var" expressions.
+//
+// TODO: support (D) by evaluating (D) when we merge results of individual queries.
 struct Expression
 {
   virtual ~Expression() = default;
@@ -481,7 +495,7 @@ struct Match{
   std::optional<WhereClause> where;
 };
 struct ReadingClause{
-  // todo Either ...
+  // todo support UNWIND
   Match match;
 };
 
@@ -490,10 +504,10 @@ struct ListOperatorExpression{};
 
 struct ProjectionItems
 {
-  // simplified...
+  // simplified wrt grammar... might need to be refactored later.
   std::vector<NonArithmeticOperatorExpression> naoExps;
 };
-// simplified...
+// simplified wrt grammar... might need to be refactored later.
 using ProjectionBody = ProjectionItems;
 using Return = ProjectionBody;
 struct SinglePartQuery{
@@ -503,11 +517,13 @@ struct SinglePartQuery{
 struct SingleQuery{
   SinglePartQuery singlePartQuery;
 };
+// Will be needed later
 /*
  struct FunctionName{
  std::string namespaceStr;
  std::string funcName;
- };*/
+ };
+ */
 struct IdentityFunction{};
 
 } // NS

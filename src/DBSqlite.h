@@ -56,7 +56,6 @@ enum class Element{
   Relationship
 };
 
-// Todo: move this notion to AST for simplicity.
 struct ReturnClauseTerm
 {
   // position of the term in the return clause.
@@ -64,15 +63,7 @@ struct ReturnClauseTerm
 
   std::string propertyName; // TODO support more later...
 };
-/*
-struct SimplePartialComparisonExpression{
-  Comparison comp;
-  Literal literal;
-};
-struct PropertyAndPCE {
-  std::string property;
-  SimplePartialComparisonExpression pce;
-};*/
+
 
 struct DB
 {
@@ -92,23 +83,23 @@ struct DB
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.
   std::string const & idProperty() const { return m_idProperty; }
-  
-  using FuncProp = std::function<void(int argc, char **argv, char **column)>;
-  
+    
+  // Contains information to order results in the same order as they were specified in the return clause.
   using ResultOrder = std::vector<std::pair<
     unsigned /* i = index into VecValues, VecColumnNames*/,
     unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
+
   using VecColumnNames = std::vector<const std::vector<std::string>*>;
   using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
 
-  using FuncProp2 = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
+  using FuncResults = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
   
   // |labels| is the list of possible labels. When empty, all labels are allowed.
   void forEachElementPropertyWithLabelsIn(const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
                                           const std::vector<std::string>& labels,
                                           const std::vector<const Expression*>* filter,
-                                          FuncProp&f);
+                                          FuncResults& f);
   
   void forEachNodeAndRelatedRelationship(const TraversalDirection,
                                          const std::vector<ReturnClauseTerm>& propertiesNode,
@@ -120,7 +111,7 @@ struct DB
                                          const std::vector<const Expression*>* nodeFilter,
                                          const std::vector<const Expression*>* relFilter,
                                          const std::vector<const Expression*>* dualNodeFilter,
-                                         FuncProp2&f);
+                                         FuncResults& f);
   
   void print();
 private:
@@ -154,5 +145,6 @@ private:
                        std::vector<const Expression*>& IDsFilter,
                        std::vector<const Expression*>& PostFilters) const;
   
+  static ResultOrder computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses);
 };
 

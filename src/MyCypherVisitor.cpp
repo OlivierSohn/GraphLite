@@ -91,8 +91,7 @@ std::any MyCypherVisitor::visitOC_RegularQuery(CypherParser::OC_RegularQueryCont
   auto _ = scope("RegularQuery");
   if(context->children.size() != 1)
   {
-    // todo grammar
-    m_errors.push_back("OC_RegularQuery Expected size of children 1");
+    m_errors.push_back("OC_RegularQuery : union is not supported yet");
     return {};
   }
   auto res = context->children[0]->accept(this);
@@ -238,13 +237,28 @@ std::any MyCypherVisitor::visitOC_Return(CypherParser::OC_ReturnContext *context
 
 std::any MyCypherVisitor::visitOC_ProjectionBody(CypherParser::OC_ProjectionBodyContext *context) {
   auto _ = scope("ProjectionBody");
-  for(const auto & child : context->children)
+  if(auto * projItems = context->DISTINCT())
   {
-    auto res = child->accept(this);
-    // TODO support entire grammar
-    if(res.type() == typeid(ProjectionItems))
-      return res;
+    m_errors.push_back("todo: support DISTINCT");
+    return {};
   }
+  if(auto * projItems = context->oC_Limit())
+  {
+    m_errors.push_back("todo: support LIMIT");
+    return {};
+  }
+  if(auto * projItems = context->oC_Skip())
+  {
+    m_errors.push_back("todo: support SKIP");
+    return {};
+  }
+  if(auto * projItems = context->oC_Order())
+  {
+    m_errors.push_back("todo: support ORDER");
+    return {};
+  }
+  if(auto * projItems = context->oC_ProjectionItems())
+    return projItems->accept(this);
   return {};
 }
 

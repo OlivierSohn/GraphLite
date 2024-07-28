@@ -65,8 +65,29 @@ std::vector<std::string> asStringVec(Labels const & labels)
   return labelsStr;
 }
 
-void runSingleQuery(const SingleQuery& q, DB& db)
+using FOnOrderAndColumnNames = std::function<void(const DB::ResultOrder&,
+                                                  const std::vector<std::string>& /* variable names */,
+                                                  const DB::VecColumnNames&)>;
+
+using FOnRow = std::function<void(const DB::VecValues&)>;
+
+//fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
+void runSingleQuery(const SingleQuery& q, DB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow)
 {
+  bool sentColumns{};
+  std::vector<std::string> variablesNames;
+  auto f = std::function{[&](const DB::ResultOrder& resultOrder,
+                             const DB::VecColumnNames& columnNames,
+                             const DB::VecValues& values){
+    if(!sentColumns)
+    {
+      // resultOrder and columnNames will always be the same so we send them once only.
+      fOnOrderAndColumnNames(resultOrder, variablesNames, columnNames);
+      sentColumns = true;
+    }
+    fOnRow(values);
+  }};
+
   const auto & spq = q.singlePartQuery;
   if(!spq.mayReadingClause.has_value())
     throw std::logic_error("Not Implemented (Expected a reading clause)");
@@ -92,10 +113,12 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   const std::unordered_map<std::string, std::vector<ReturnClauseTerm>> props =
   extractProperties(spq.returnClause.naoExps);
   
+  // TODO make the code of forEachNodeAndRelatedRelationship more generic/symmetrical
+  //   s.t we don't need to detect which pattern is active here.
   auto nodePatternIsActive = [&](const NodePattern& np)
   {
-    if(np.mayVariable.has_value() && props.count(np.mayVariable->symbolicName.str))
-      // the node pattern has a variable AND this variable is used in the return clause.
+    if(np.mayVariable.has_value() && (props.count(np.mayVariable->symbolicName.str) || whereTermsByVar.count(np.mayVariable->symbolicName.str)))
+      // the node pattern has a variable AND this variable is used in the return clause or in the where clause.
       return true;
     return !np.labels.labels.empty();
   };
@@ -168,7 +191,7 @@ void runSingleQuery(const SingleQuery& q, DB& db)
         if(0 == allVariables.count(varName))
           throw std::logic_error("Variable '" + varName + "' used in the where clause was not defined.");
     }
-    
+
     const std::vector<const Expression*> * nodeFilter{};
     const std::vector<const Expression*> * relFilter{};
     const std::vector<const Expression*> * dualNodeFilter{};
@@ -182,35 +205,22 @@ void runSingleQuery(const SingleQuery& q, DB& db)
       if(const auto it = whereTermsByVar.find(dualNodeVariable->symbolicName.str); it != whereTermsByVar.end())
         dualNodeFilter = &it->second;
     
-    std::vector<std::string> variablesNames;
-
     variablesNames.push_back(nodeVariable->symbolicName.str);
     variablesNames.push_back(relVariable->symbolicName.str);
     variablesNames.push_back(dualNodeVariable->symbolicName.str);
-
-    {
-      auto f = std::function{[&](const DB::ResultOrder& resultOrder,
-                                 const DB::VecColumnNames& columnNames,
-                                 const DB::VecValues& values){
-        auto _ = LogIndentScope();
-        std::cout << LogIndent{};
-        for(const auto & [i, j] : resultOrder)
-          std::cout << variablesNames[i] << "." << (*columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
-        std::cout << std::endl;
-      }};
-      const TraversalDirection traversalDirection = app.patternElementChains[0].relPattern.traversalDirection;
-      db.forEachNodeAndRelatedRelationship(leftNodeVarIsActive ? traversalDirection : mirror(traversalDirection),
-                                           propertiesNode,
-                                           propertiesRel,
-                                           propertiesDualNode,
-                                           asStringVec(nodeLabels),
-                                           asStringVec(relLabels),
-                                           asStringVec(dualNodeLabels),
-                                           nodeFilter,
-                                           relFilter,
-                                           dualNodeFilter,
-                                           f);
-    }
+    
+    const TraversalDirection traversalDirection = app.patternElementChains[0].relPattern.traversalDirection;
+    db.forEachNodeAndRelatedRelationship(leftNodeVarIsActive ? traversalDirection : mirror(traversalDirection),
+                                         propertiesNode,
+                                         propertiesRel,
+                                         propertiesDualNode,
+                                         asStringVec(nodeLabels),
+                                         asStringVec(relLabels),
+                                         asStringVec(dualNodeLabels),
+                                         nodeFilter,
+                                         relFilter,
+                                         dualNodeFilter,
+                                         f);
     return;
   }
   
@@ -236,7 +246,9 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   
   const auto& variable = singleNodeVariable ? *nodePattern.mayVariable : *app.patternElementChains[0].relPattern.mayVariable;
   const auto& labels = singleNodeVariable ? nodePattern.labels : app.patternElementChains[0].relPattern.labels;
-  
+
+  variablesNames.push_back(variable.symbolicName.str);
+
   if(spq.returnClause.naoExps.empty())
     throw std::logic_error("Not Implemented (Expected some non arithmetic expression)");
   
@@ -255,13 +267,6 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   const std::vector<std::string> labelsStr = asStringVec(labels);
   
   {
-    auto f = std::function{[&](int argc, char **argv, char **column){
-      auto _ = LogIndentScope();
-      std::cout << LogIndent{};
-      for(size_t i=0; i<argc; ++i)
-        std::cout << variable.symbolicName.str << "." << column[i] << " = " << (argv[i] ? argv[i] : "<null>") << '|';
-      std::cout << std::endl;
-    }};
     auto it = whereTermsByVar.find(variable.symbolicName.str);
     const std::vector<const Expression*>* filter{};
     if(it != whereTermsByVar.end())
@@ -274,13 +279,44 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   }
 }
 
+struct PrettyPrintQueryResults
+{
+  void onOrderAndColumnNames(const DB::ResultOrder& ro, const std::vector<std::string>& varNames, const DB::VecColumnNames& colNames) {
+    m_resultOrder = ro;
+    m_variablesNames = varNames;
+    m_columnNames = colNames;
+  }
+
+  void onRow(const DB::VecValues& values)
+  {
+    auto _ = LogIndentScope();
+    std::cout << LogIndent{};
+    for(const auto & [i, j] : m_resultOrder)
+      std::cout << m_variablesNames[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
+    std::cout << std::endl;
+  }
+
+private:
+  DB::ResultOrder m_resultOrder;
+  std::vector<std::string> m_variablesNames;
+  DB::VecColumnNames m_columnNames;
+};
+
+template<typename ResultsHander = PrettyPrintQueryResults>
 void runCypher(const std::string& cyperQuery, DB&db)
 {
   const auto ast = cypherQueryToAST(db.idProperty(), cyperQuery);
   std::cout << std::endl;
   std::cout << "[openCypher] " << cyperQuery << std::endl;
   const auto _ = LogIndentScope{};
-  runSingleQuery(ast, db);
+
+  ResultsHander resultsHandler;
+  
+  runSingleQuery(ast, db,
+                 [&](const DB::ResultOrder& ro, const std::vector<std::string>& varNames, const DB::VecColumnNames& colNames)
+                 { resultsHandler.onOrderAndColumnNames(ro, varNames, colNames); },
+                 [&](const DB::VecValues& values)
+                 { resultsHandler.onRow(values); });
 }
 } // NS
 
@@ -314,16 +350,6 @@ int main()
 
   try
   {
-    // The where clause can be expressed in this form:
-    //   (A) <term applying to the left node properties> AND
-    //   (B) <term applying to the right node properties> AND
-    //   (C) <term applying to the relationship properties> AND
-    //   (D) <term applying to multiple items>
-    //
-    // in the SQL queries to retrieve properties we can apply the A, B, C parts of the clause and return as an extra field whether the row is valid.
-    //
-    // We need to evaluate (D) ourselves, at the end, when we return results.
-
     // Where clause with id or property lookup
     runCypher("MATCH (`n`)       WHERE n.test = 3   RETURN id(`n`), `n`.test, `n`.`what`;", db);
     runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(n) = 1 RETURN id(m), id(n), id(`r`), `m`.test;", db);
@@ -366,6 +392,8 @@ int main()
     // - verify filtering on ids works as intended:
     //     using a very large graph, find nodes one hop away from a given node and compare with/without prefiltering on ids.
 
+    // TODO support UNION
+
     // todo in MATCH (`n`)-[r]-(`m`) WHERE ... RETURN ...,
     //   and the where clause contains no filtering on ids:
     //   if there is no constraint on relationships, and there are constraints on nodes types and/or properties,
@@ -382,7 +410,7 @@ int main()
     // todo (property value)
     //runCypher("MATCH (`n`:Node1{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;", db);
 
-    // todo same as above, but do a union on "entity types that have a test property"
+    // todo same as above, verify we do a union on "entity types that have a test property"
     //runCypher("MATCH (`n`:{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;", db);
 
     return 0;
