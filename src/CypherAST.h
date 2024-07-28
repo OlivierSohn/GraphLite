@@ -101,25 +101,37 @@ struct PropertyKeyName
   SymbolicName symbolicName;
 };
 
+// Definitions for terms used in comments:
+//
+// # Equi-var
+// All nodes of an "Equi-var" (sub-)tree use properties of the _same_ variable.
+//
+// # Equi-property
+// All nodes of an "Equi-property" (sub-)tree use the _same_ property of the _same_ variable.
 struct Expression
 {
   virtual ~Expression() = default;
   
   virtual std::unique_ptr<Expression> StealAsPtr() = 0;
-  
-  // # Definitions
-  // An "Equi-var sub tree" is a sub tree where each node uses properties of the _same_ variable.
-  
-  // Verify that the expression tree is equi-var, or is an AND aggregation of equi-var subtrees.
-  //
-  // When this is not the case, an exception is thrown,
-  // else equi-var subtrees are returned in |res|
+    
+  // If "the expression tree is equi-var, or the expression tree is an AND-aggregation of equi-var subtrees",
+  //   equi-var subtrees are returned in |res|.
+  // Otherwise, an exception is thrown.
   virtual void asAndEquiVarSubTrees(std::unordered_map<std::string /*variable*/, std::vector<const Expression*>>& res) const = 0;
   
-  // returns the variabe of the equi-var tree
-  // or throws an exception if the tree is not equi-var.
+  // If the expression tree is equi-var,
+  //   returns the corresponding variable
+  // Else throws an exception
   virtual std::string asEquiVarTree() const = 0;
-  
+
+  // Precondition: the caller has verified that the Expression is equi-var,
+  //   i.e calling asEquiVarTree() doesn't throw.
+  //
+  // If the expression tree is equi-property,
+  //   returns the corresponding variable
+  // Else throws an exception
+  virtual std::string asEquiPropertyTree() const = 0;
+
   // throws if the translation is not supported yet.
   virtual std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::unordered_set<std::string>& sqlFields) const = 0;
@@ -202,13 +214,18 @@ struct AggregateExpression : public Expression
       // the tree will be equivar.
       throw std::logic_error("Xor is not AndEquiVarSubTrees");
     }
+
     for(const auto & exp: subExpressions())
       res[exp->asEquiVarTree()].push_back(exp.get());
-    if(res.size() == 1)
-      // all sub expressions have the same variable, so we return ourselves instead.
-      res.begin()->second = std::vector<const Expression*>{this};
-    else if(m_aggregator == Aggregator::OR)
-      throw std::logic_error("Or with different vars is not AndEquiVarSubTrees");
+    
+    if(m_aggregator == Aggregator::OR)
+    {
+      if(res.size() == 1)
+        // all sub expressions have the same variable, so we return ourselves instead.
+        res.begin()->second = std::vector<const Expression*>{this};
+      else
+        throw std::logic_error("Or with different vars is not AndEquiVarSubTrees");
+    }
   }
 
   std::string asEquiVarTree() const override
@@ -228,6 +245,25 @@ struct AggregateExpression : public Expression
     if(!var.has_value())
       throw std::logic_error("no subexpression found");
     return *var;
+  }
+
+  std::string asEquiPropertyTree() const override
+  {
+    std::optional<std::string> prop;
+    for(const auto & expr : subExpressions())
+    {
+      const std::string prop2 = expr->asEquiPropertyTree();
+      if(prop.has_value())
+      {
+        if(*prop != prop2)
+          throw std::logic_error("not equi prop");
+      }
+      else
+        prop = prop2;
+    }
+    if(!prop.has_value())
+      throw std::logic_error("no subexpression found");
+    return *prop;
   }
 
   std::unique_ptr<sql::Expression>
@@ -296,8 +332,33 @@ struct NonArithmeticOperatorExpression : public Expression
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
-    },atom.var);
+    }, atom.var);
   }
+
+  std::string asEquiPropertyTree() const override
+  {
+    return std::visit([&](auto && arg) -> std::string {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, Variable>)
+      {
+        if(!mayPropertyName.has_value())
+          // in equi-var trees, all nodes must use _properties_ of the same variable.
+          throw std::logic_error("no property");
+        return mayPropertyName->symbolicName.str;
+      }
+      else if constexpr (std::is_same_v<T, Literal>)
+      {
+        throw std::logic_error("literal");
+      }
+      else if constexpr (std::is_same_v<T, AggregateExpression>)
+      {
+        return arg.asEquiPropertyTree();
+      }
+      else
+        static_assert(c_false<T>, "non-exhaustive visitor!");
+    }, atom.var);
+  }
+
   std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::unordered_set<std::string>& sqlFields) const override
   {
@@ -369,6 +430,24 @@ struct ComparisonExpression : public Expression {
     if(!ok)
       throw std::logic_error("ComparisonExpression: Right and Left variables are different");
     return varLeft;
+  }
+  std::string asEquiPropertyTree() const override
+  {
+    const std::string propLeft = leftExp.asEquiPropertyTree();
+    bool ok = true;
+    try
+    {
+      const std::string propRight = partial.rightExp.asEquiPropertyTree();
+      if(propRight != propLeft)
+        ok = false;
+    }
+    catch(std::exception &)
+    {
+      // means the right part is a Literal.
+    }
+    if(!ok)
+      throw std::logic_error("ComparisonExpression: Right and Left properties are different");
+    return propLeft;
   }
 
   std::unique_ptr<sql::Expression>

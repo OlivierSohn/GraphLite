@@ -78,7 +78,7 @@ struct DB
 {
   using Expression = openCypher::Expression;
   using TraversalDirection = openCypher::TraversalDirection;
-
+  
   DB(bool printSQLRequests);
   ~DB();
   
@@ -101,14 +101,14 @@ struct DB
                                        const std::vector<std::string>& nodePropertiesNames,
                                        const std::vector<std::string>& relationshipPropertiesNames,
                                        const std::vector<std::string>& dualNodePropertiesNames)>;
-
+  
   // |labels| is the list of possible labels. When empty, all labels are allowed.
   void forEachElementPropertyWithLabelsIn(const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
                                           const std::vector<std::string>& labels,
-                                          const Expression* filter,
+                                          const std::vector<const Expression*>* filter,
                                           FuncProp&f);
-
+  
   void forEachNodeAndRelatedRelationship(const TraversalDirection,
                                          const std::vector<ReturnClauseTerm>& propertiesNode,
                                          const std::vector<ReturnClauseTerm>& propertiesRel,
@@ -116,11 +116,11 @@ struct DB
                                          const std::vector<std::string>& nodeLabelsStr,
                                          const std::vector<std::string>& relLabelsStr,
                                          const std::vector<std::string>& dualNodeLabelsStr,
-                                         const std::vector<const Expression*>& nodeFilter,
-                                         const std::vector<const Expression*>& relFilter,
-                                         const std::vector<const Expression*>& dualNodeFilter,
+                                         const std::vector<const Expression*>* nodeFilter,
+                                         const std::vector<const Expression*>* relFilter,
+                                         const std::vector<const Expression*>* dualNodeFilter,
                                          FuncProp2&f);
-
+  
   void print();
 private:
   std::string m_idProperty{"SYS__ID"};
@@ -135,7 +135,7 @@ private:
   
   std::vector<std::string> computeLabels(const Element, const std::vector<std::string>& inputLabels) const;
   std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
-
+  
   [[nodiscard]]
   bool prepareProperties(const std::string& typeName, const std::vector<std::pair<std::string, std::string>>& propValues, std::vector<std::string>& propertyNames, std::vector<std::string>& propertyValues);
   
@@ -143,7 +143,15 @@ private:
   bool findValidProperties(const std::string& typeName, const std::vector<std::string>& propNames, std::vector<bool>& valid) const;
   
   void addElement(const std::string& typeName, const ID& id, const std::vector<std::pair<std::string, std::string>>& propValues);
-
+  
   void printReq(const std::string& req) const;
+  
+  void splitIDsFilters(const std::vector<const Expression*>* allFilters,
+                       std::vector<const Expression*>& IDsFilters,
+                       std::vector<const Expression*>& PostFilters) const;
+  void splitIDsFilters(const Expression& filter,
+                       std::vector<const Expression*>& IDsFilter,
+                       std::vector<const Expression*>& PostFilters) const;
+  
 };
 

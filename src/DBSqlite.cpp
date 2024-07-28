@@ -55,17 +55,25 @@ DB::DB(bool printSQLRequests)
       // ignore error
       auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
     }
-    std::ostringstream s;
-    s << "CREATE TABLE " << typeName << " (";
     {
-      s << m_idProperty << " INTEGER PRIMARY KEY, ";
-      s << "NodeType INTEGER";
+      std::ostringstream s;
+      s << "CREATE TABLE " << typeName << " (";
+      {
+        s << m_idProperty << " INTEGER PRIMARY KEY, ";
+        s << "NodeType INTEGER";
+      }
+      s << ");";
+      const std::string req = s.str();
+      printReq(req);
+      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+        throw std::logic_error(sqlite3_errstr(res));
     }
-    s << ");";
-    const std::string req = s.str();
-    printReq(req);
-    if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
-      throw std::logic_error(sqlite3_errstr(res));
+    {
+      const std::string req = "CREATE INDEX NodeTypeIndex ON " + typeName + "(NodeType);";
+      printReq(req);
+      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+        throw std::logic_error(sqlite3_errstr(res));
+    }
   }
   {
     LogIndentScope _ = logScope(std::cout, "Creating Relationships System table...");
@@ -76,19 +84,39 @@ DB::DB(bool printSQLRequests)
       // ignore error
       auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
     }
-    std::ostringstream s;
-    s << "CREATE TABLE " << typeName << " (";
     {
-      s << m_idProperty << " INTEGER PRIMARY KEY, ";
-      s << "RelationshipType INTEGER, ";
-      s << "OriginID INTEGER, ";
-      s << "DestinationID INTEGER";
+      std::ostringstream s;
+      s << "CREATE TABLE " << typeName << " (";
+      {
+        s << m_idProperty << " INTEGER PRIMARY KEY, ";
+        s << "RelationshipType INTEGER, ";
+        s << "OriginID INTEGER, ";
+        s << "DestinationID INTEGER";
+      }
+      s << ");";
+      const std::string req = s.str();
+      printReq(req);
+      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+        throw std::logic_error(sqlite3_errstr(res));
     }
-    s << ");";
-    const std::string req = s.str();
-    printReq(req);
-    if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
-      throw std::logic_error(sqlite3_errstr(res));
+    {
+      const std::string req = "CREATE INDEX RelationshipTypeIndex ON " + typeName + "(RelationshipType);";
+      printReq(req);
+      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+        throw std::logic_error(sqlite3_errstr(res));
+    }
+    {
+      const std::string req = "CREATE INDEX originIDIndex ON " + typeName + "(OriginID);";
+      printReq(req);
+      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+        throw std::logic_error(sqlite3_errstr(res));
+    }
+    {
+      const std::string req = "CREATE INDEX destinationIDIndex ON " + typeName + "(DestinationID);";
+      printReq(req);
+      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+        throw std::logic_error(sqlite3_errstr(res));
+    }
   }
   {
     LogIndentScope _ = logScope(std::cout, "Creating Types System table...");
@@ -400,8 +428,10 @@ std::vector<size_t> DB::labelsToTypeIndices(const Element elem, const std::vecto
 [[nodiscard]]
 bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
                            const std::unordered_set<std::string>& sqlFields,
+                           const std::unordered_map<std::string, std::string>& propertyMap,
                            std::string& sqlFilter)
 {
+  sqlFilter.clear();
   if(cypherExprs.empty())
     throw std::logic_error("expected at least one expression");
   
@@ -427,14 +457,58 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
       case sql::Evaluation::False:
         return false;
       case sql::Evaluation::True:
-        sqlFilter.clear();
         return true;
     }
   }
   std::ostringstream s;
-  sqlExpr->toString(s);
+  sqlExpr->toString(propertyMap, s);
   sqlFilter = s.str();
   return true;
+}
+
+// Partitions filters found in |allFilters| into
+// |IDsFilters| containing filters that can be preapplied on IDs (when querying the relationships system table)
+// and |Filters| that must be applied when querying non-system tables.
+void DB::splitIDsFilters(const std::vector<const Expression*>* allFilters,
+                         std::vector<const Expression*>& IDsFilters,
+                         std::vector<const Expression*>& PostFilters) const
+{
+  IDsFilters.clear();
+  PostFilters.clear();
+  if(!allFilters)
+    return;
+  for(const auto * filter : *allFilters)
+    splitIDsFilters(*filter, IDsFilters, PostFilters);
+}
+
+void DB::splitIDsFilters(const Expression& filter,
+                         std::vector<const Expression*>& IDsFilters,
+                         std::vector<const Expression*>& PostFilters) const
+{
+  using openCypher::AggregateExpression;
+  using openCypher::Aggregator;
+  
+  // if filter is an AND aggregation, we recursively call this function on sub-expressions
+  if(auto * aggr = dynamic_cast<const AggregateExpression*>(&filter))
+    if(aggr->aggregator() == Aggregator::AND)
+      for(const auto & subExpr : aggr->subExpressions())
+        splitIDsFilters(*subExpr, IDsFilters, PostFilters);
+  
+  // if the entire expression only uses the property m_idProperty, place it in
+  // IDsFilter, else place it in PostFilters.
+  
+  bool isIDFilter{};
+  try
+  {
+    isIDFilter = (filter.asEquiPropertyTree() == m_idProperty);
+  }
+  catch(std::exception const &)
+  {
+  }
+  if(isIDFilter)
+    IDsFilters.push_back(&filter);
+  else
+    PostFilters.push_back(&filter);
 }
 
 void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDirection,
@@ -444,9 +518,9 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
                                            const std::vector<std::string>& nodeLabelsStr,
                                            const std::vector<std::string>& relLabelsStr,
                                            const std::vector<std::string>& dualNodeLabelsStr,
-                                           const std::vector<const Expression*>& nodeFilter,
-                                           const std::vector<const Expression*>& relFilter,
-                                           const std::vector<const Expression*>& dualNodeFilter,
+                                           const std::vector<const Expression*>* nodeFilterAll,
+                                           const std::vector<const Expression*>* relFilterAll,
+                                           const std::vector<const Expression*>* dualNodeFilterAll,
                                            FuncProp2&f)
 {
   if(traversalDirection == TraversalDirection::Any)
@@ -455,9 +529,20 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
     // We can traverse the system relationships table once only.
     for(const auto td : {TraversalDirection::Forward, TraversalDirection::Backward})
       forEachNodeAndRelatedRelationship(td, propertiesNode, propertiesRel, propertiesDualNode, nodeLabelsStr, relLabelsStr, dualNodeLabelsStr,
-                                        nodeFilter, relFilter, dualNodeFilter, f);
+                                        nodeFilterAll, relFilterAll, dualNodeFilterAll, f);
     return;
   }
+
+  std::vector<const Expression*> nodeFilterIDs;
+  std::vector<const Expression*> nodeFilterPost;
+  std::vector<const Expression*> dualNodeFilterIDs;
+  std::vector<const Expression*> dualNodeFilterPost;
+  std::vector<const Expression*> relFilterIDs;
+  std::vector<const Expression*> relFilterPost;
+  
+  splitIDsFilters(nodeFilterAll, nodeFilterIDs, nodeFilterPost);
+  splitIDsFilters(relFilterAll, relFilterIDs, relFilterPost);
+  splitIDsFilters(dualNodeFilterAll, dualNodeFilterIDs, dualNodeFilterPost);
 
   const std::string relatedNodeID = (traversalDirection == TraversalDirection::Forward) ? "OriginID" : "DestinationID";
   const std::string relatedDualNodeID = (traversalDirection == TraversalDirection::Backward) ? "OriginID" : "DestinationID";
@@ -469,9 +554,9 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   const std::optional<std::vector<size_t>> relTypesFilter = relLabelsStr.empty() ?
     std::nullopt : std::optional{labelsToTypeIndices(Element::Relationship, relLabelsStr)};
 
-  const bool withDualNodesInfo = dualNodeTypesFilter.has_value() || !propertiesDualNode.empty();
+  const bool withDualNodesInfo = dualNodeTypesFilter.has_value() || !propertiesDualNode.empty() || !dualNodeFilterIDs.empty() || !dualNodeFilterPost.empty();
   
-  const bool withNodeInfo = nodeTypesFilter.has_value() || !propertiesNode.empty();
+  const bool withNodeInfo = nodeTypesFilter.has_value() || !propertiesNode.empty() || !nodeFilterIDs.empty() || !nodeFilterPost.empty();
   if(!withNodeInfo)
     throw std::logic_error("Unexpected, maybe you should use forEachElementPropertyWithLabelsIn");
 
@@ -491,6 +576,23 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   // - relLabelsStr
   // - dualNodeLabelsStr
 
+  // Filter on ids of rel, node, dualnode when possible.
+  // For cases like this:
+  // #  id(n) in <IDS> AND n.weight > 3 AND n.weight < 10
+  // we know that we can filter on IDS, but in this case:
+  // #  id(n) in <IDS> OR n.weight > 3
+  // filtering on IDS would filter too much because some nodes with n.weight > 3 may not have their ids in IDS.
+  // To handle this case we could run queries against non-system node tables to gather ids for which n.weight > 3
+  // (if there is an index on weight?).
+  // To decide whether that would be beneficial, we can look at the number of nodes in tables vs number of relationships,
+  // whether there are indexes on weight properties,
+  // whether other filters on ids (on the other node of the pattern, or on the relationship) exist so that
+  // relying on them could be sufficient to reduce the count of relationships scanned, etc...
+  // We could also leverage parallelism:
+  // - in thread A, scan relationships without filtering ids of n, and proceed to computing the results
+  // - in thread B, gather ids of nodes s.t n.weight > 3, then scan relationships by filtering on ids of n, and proceed to computing the results
+  // The first thread ready to return results cancels the other thread.
+
   {
     std::ostringstream s;
     s << "SELECT relationships.SYS__ID, RelationshipType";
@@ -502,10 +604,36 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
     if(withDualNodesInfo)
       s << " INNER JOIN nodes dualNodes ON dualNodes.SYS__ID = relationships." << relatedDualNodeID;
     bool hasWhere{};
+    auto addWhereTerm = [&]()
+    {
+      if(hasWhere)
+        s << " AND ";
+      else
+      {
+        hasWhere = true;
+        s << " WHERE ";
+      }
+    };
+    auto tryAddIDsFiltering = [&](const std::vector<const Expression*>& filterIDs, std::string const& idAlias)
+    {
+      if(!filterIDs.empty())
+      {
+        std::unordered_map<std::string, std::string> propertyMap;
+        propertyMap[m_idProperty] = idAlias;
+        std::string sqlFilter;
+        if(!toEquivalentSQLFilter(filterIDs, {m_idProperty}, propertyMap, sqlFilter))
+          throw std::logic_error("Should never happen: expressions in *FilterIDs are all equi-property with property m_idProperty");
+        if(!sqlFilter.empty())
+        {
+          addWhereTerm();
+          s << "( " << sqlFilter << " )";
+        }
+      }
+    };
     if(relTypesFilter.has_value())
     {
-      s << " WHERE RelationshipType IN (";
-      hasWhere = true;
+      addWhereTerm();
+      s << " RelationshipType IN (";
       bool first = true;
       for(const auto typeIdx : *relTypesFilter)
       {
@@ -519,13 +647,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
     }
     if(nodeTypesFilter.has_value())
     {
-      if(hasWhere)
-        s << " AND ";
-      else
-      {
-        hasWhere = true;
-        s << " WHERE ";
-      }
+      addWhereTerm();
       s << " nodes.NodeType IN (";
       bool first = true;
       for(const auto typeIdx : *nodeTypesFilter)
@@ -540,13 +662,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
     }
     if(dualNodeTypesFilter.has_value())
     {
-      if(hasWhere)
-        s << " AND ";
-      else
-      {
-        hasWhere = true;
-        s << " WHERE ";
-      }
+      addWhereTerm();
       s << " dualNodes.NodeType IN (";
       bool first = true;
       for(const auto typeIdx : *dualNodeTypesFilter)
@@ -559,6 +675,10 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
       }
       s << ")";
     }
+    tryAddIDsFiltering(nodeFilterIDs, relatedNodeID);
+    tryAddIDsFiltering(dualNodeFilterIDs, relatedDualNodeID);
+    tryAddIDsFiltering(relFilterIDs, "relationships.SYS__ID");
+
     const std::string req = s.str();
 
     printReq(req);
@@ -598,8 +718,6 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   // (todo in parallel)
   // Get needed property values of nodes, dual nodes and relationships
   //   and filter.
-  
-  // todo optimize for cases where we have no filter and we only want ids which we already have.
 
   std::vector<std::string> strPropertiesNode;
   for(const auto & rct : propertiesNode)
@@ -616,7 +734,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   auto buildQuery = [this](const auto& elemsByType,
                            const Element elem,
                            const std::vector<std::string>& strProperties,
-                           const std::vector<const Expression*>& filter,
+                           const std::vector<const Expression*>& filterPost,
                            std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties)
   {
     bool firstOutter = true;
@@ -632,8 +750,8 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
         // label does not exist.
         continue;
       std::string sqlFilter{};
-      if(!filter.empty())
-        if(!toEquivalentSQLFilter(filter, m_properties[label], sqlFilter))
+      if(!filterPost.empty())
+        if(!toEquivalentSQLFilter(filterPost, m_properties[label], {}, sqlFilter))
           // These items are excluded by the filter.
           continue;
       bool hasValidProperty{};
@@ -687,9 +805,9 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
 
-  auto nodesQuery = buildQuery(nodesByTypes, Element::Node, strPropertiesNode, nodeFilter, nodeProperties);
-  auto dualNodesQuery = buildQuery(dualNodesByTypes, Element::Node, strPropertiesDualNode, dualNodeFilter, dualNodeProperties);
-  auto relsQuery = buildQuery(relsByTypes, Element::Relationship, strPropertiesRel, relFilter, relProperties);
+  auto nodesQuery = buildQuery(nodesByTypes, Element::Node, strPropertiesNode, nodeFilterPost, nodeProperties);
+  auto dualNodesQuery = buildQuery(dualNodesByTypes, Element::Node, strPropertiesDualNode, dualNodeFilterPost, dualNodeProperties);
+  auto relsQuery = buildQuery(relsByTypes, Element::Relationship, strPropertiesRel, relFilterPost, relProperties);
 
   if(!nodesQuery.empty())
   {
@@ -770,7 +888,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
 void DB::forEachElementPropertyWithLabelsIn(const Element elem,
                                             const std::vector<ReturnClauseTerm>& returnClauseTerms,
                                             const std::vector<std::string>& inputLabels,
-                                            const Expression* filter,
+                                            const std::vector<const Expression*>* filter,
                                             FuncProp& f)
 {
   // extract property names and verify they are in ascending order.
@@ -792,8 +910,8 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
       // label does not exist.
       continue;
     std::string sqlFilter{};
-    if(filter)
-      if(!toEquivalentSQLFilter(std::vector<const openCypher::Expression*>{filter}, m_properties[label], sqlFilter))
+    if(filter && !filter->empty())
+      if(!toEquivalentSQLFilter(*filter, m_properties[label], {}, sqlFilter))
         // These items are excluded by the filter.
         continue;
     // in forEachNodeAndRelatedRelationship we have an optimization where

@@ -82,23 +82,11 @@ void runSingleQuery(const SingleQuery& q, DB& db)
   std::vector<const Expression*> /* expressions of the vector are ANDed*/>
   whereTermsByVar;
 
-  // Verify the expression tree is in this form (because for now this is the only form we know how to handle):
-  //
-  //                     |And|
-  //                    /  |  \
-  //                  /    |    \
-  //             "node"  "rel"   "dual node"
-  //          sub tree  sub tree  sub tree
-  //
-  // and in each sub tree, we only use properties of "node" (resp. "rel", "dual node").
-  //
-  // We verify this while doing a post-order traversal to construct the
-  //   "node', "rel", "dual node" openCypher expression subtrees.
-  //
-  // If the tree is not in this form, an exception is thrown.
   if(spq.mayReadingClause->match.where.has_value())
+    // If the tree is not Equi-var, an exception is thrown.
+    // todo: support non-Equi-var trees (i.e: WHERE n.weight > 3 OR r.status = 2)
     spq.mayReadingClause->match.where->exp->asAndEquiVarSubTrees(whereTermsByVar);
-  
+
   const auto & app = mpp.anonymousPatternPart;
   
   const std::unordered_map<std::string, std::vector<ReturnClauseTerm>> props =
@@ -178,21 +166,21 @@ void runSingleQuery(const SingleQuery& q, DB& db)
       
       for(const auto &[varName, _]: whereTermsByVar)
         if(0 == allVariables.count(varName))
-          throw std::logic_error("Variable '" + varName + "' usesd in the where clause was not defined.");
+          throw std::logic_error("Variable '" + varName + "' used in the where clause was not defined.");
     }
     
-    std::vector<const Expression*> nodeFilter{};
-    std::vector<const Expression*> relFilter{};
-    std::vector<const Expression*> dualNodeFilter{};
+    const std::vector<const Expression*> * nodeFilter{};
+    const std::vector<const Expression*> * relFilter{};
+    const std::vector<const Expression*> * dualNodeFilter{};
     if(nodeVariable.has_value())
       if(const auto it = whereTermsByVar.find(nodeVariable->symbolicName.str); it != whereTermsByVar.end())
-        nodeFilter = it->second;
+        nodeFilter = &it->second;
     if(relVariable.has_value())
       if(const auto it = whereTermsByVar.find(relVariable->symbolicName.str); it != whereTermsByVar.end())
-        relFilter = it->second;
+        relFilter = &it->second;
     if(dualNodeVariable.has_value())
       if(const auto it = whereTermsByVar.find(dualNodeVariable->symbolicName.str); it != whereTermsByVar.end())
-        dualNodeFilter = it->second;
+        dualNodeFilter = &it->second;
     
     {
       auto f = std::function{[&](const std::vector<std::optional<std::string>>& nodePropertiesValues,
@@ -278,14 +266,9 @@ void runSingleQuery(const SingleQuery& q, DB& db)
       std::cout << std::endl;
     }};
     auto it = whereTermsByVar.find(variable.symbolicName.str);
-    const Expression * filter{};
+    const std::vector<const Expression*>* filter{};
     if(it != whereTermsByVar.end())
-    {
-      if(it->second.size() != 1)
-        throw std::logic_error("In single var case we should have at most a single expression in whereTermsByVar.");
-      else
-        filter = it->second[0];
-    }
+      filter = &it->second;
     db.forEachElementPropertyWithLabelsIn(elem,
                                           properties,
                                           labelsStr,
@@ -381,15 +364,21 @@ int main()
     runCypher("MATCH (`n`)-[r]-(`m`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) AND n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`, id(m), id(r);", db);
 
     // todo write some unit tests
+    
+    // todo write some performance tests
+    // - verify filtering on ids works as intended:
+    //     using a very large graph, find nodes one hop away from a given node and compare with/without prefiltering on ids.
 
-    // todo in MATCH (`n`)-[r]-(`m`) WHERE ... RETURN ..., we could have several strategies based on
-    //   how the constraints are specified, the idea being to optimize the query.
-    //   for example, if there is no constraint on relationships, and there are constraints on nodes (based only on types or also based on properties),
+    // todo in MATCH (`n`)-[r]-(`m`) WHERE ... RETURN ...,
+    //   and the where clause contains no filtering on ids:
+    //   if there is no constraint on relationships, and there are constraints on nodes types and/or properties,
     //     it may be faster to start by querying the non-system nodes tables, deduce which nodes ids are relevant, and then
     //     use these ids to filter the relationships table.
+    //   -> create a test example that shows the perf issue before trying to fix it.
 
     // todo longer path patterns: (a)-[r1]->(b)-[r2]->(c)
-
+    // todo longer path patterns: (a)-[r1:*..3]->(b)
+    
     // todo deduce labels from where clause (used in FFP):
     //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;", db);
 
