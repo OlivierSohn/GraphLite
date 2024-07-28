@@ -65,7 +65,7 @@ struct ReturnClauseTerm
 };
 
 
-struct DB
+struct GraphDB
 {
   using Expression = openCypher::Expression;
   using TraversalDirection = openCypher::TraversalDirection;
@@ -83,8 +83,8 @@ struct DB
   using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
   using FuncOnDBDiagnosticContent = std::function<void(int argc, char **argv, char **column)>;
 
-  DB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic);
-  ~DB();
+  GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic);
+  ~GraphDB();
   
   // Creates a sql table.
   // todo support typed properties.

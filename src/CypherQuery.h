@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CypherAST.h"
-#include "DBSqlite.h"
+#include "GraphDBSqlite.h"
 
 #include <string>
 
@@ -11,19 +11,19 @@ namespace detail
 {
 SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& query);
 
-using FOnOrderAndColumnNames = std::function<void(const DB::ResultOrder&,
+using FOnOrderAndColumnNames = std::function<void(const GraphDB::ResultOrder&,
                                                   const std::vector<std::string>& /* variable names */,
-                                                  const DB::VecColumnNames&)>;
+                                                  const GraphDB::VecColumnNames&)>;
 
-using FOnRow = std::function<void(const DB::VecValues&)>;
+using FOnRow = std::function<void(const GraphDB::VecValues&)>;
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
-void runSingleQuery(const SingleQuery& q, DB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow);
+void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow);
 }
 
 
 template<typename ResultsHander>
-void runCypher(const std::string& cypherQuery, DB&db)
+void runCypher(const std::string& cypherQuery, GraphDB&db)
 {
   using detail::cypherQueryToAST;
   using detail::runSingleQuery;
@@ -33,9 +33,9 @@ void runCypher(const std::string& cypherQuery, DB&db)
   ResultsHander resultsHandler(cypherQuery);
   
   runSingleQuery(ast, db,
-                 [&](const DB::ResultOrder& ro, const std::vector<std::string>& varNames, const DB::VecColumnNames& colNames)
+                 [&](const GraphDB::ResultOrder& ro, const std::vector<std::string>& varNames, const GraphDB::VecColumnNames& colNames)
                  { resultsHandler.onOrderAndColumnNames(ro, varNames, colNames); },
-                 [&](const DB::VecValues& values)
+                 [&](const GraphDB::VecValues& values)
                  { resultsHandler.onRow(values); });
 }
 } // NS

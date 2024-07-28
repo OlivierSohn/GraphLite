@@ -1,7 +1,7 @@
 #include <string>
 #include <exception>
 
-#include "DBSqlite.h"
+#include "GraphDBSqlite.h"
 #include "CypherQuery.h"
 #include "Logs.h"
 
@@ -15,13 +15,13 @@ int main()
       std::cout << "[openCypher] " << cypherQuery << std::endl;
       m_logIndentScope = std::make_unique<LogIndentScope>();
     }
-    void onOrderAndColumnNames(const DB::ResultOrder& ro, const std::vector<std::string>& varNames, const DB::VecColumnNames& colNames) {
+    void onOrderAndColumnNames(const GraphDB::ResultOrder& ro, const std::vector<std::string>& varNames, const GraphDB::VecColumnNames& colNames) {
       m_resultOrder = ro;
       m_variablesNames = varNames;
       m_columnNames = colNames;
     }
     
-    void onRow(const DB::VecValues& values)
+    void onRow(const GraphDB::VecValues& values)
     {
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
@@ -32,9 +32,9 @@ int main()
     
   private:
     std::unique_ptr<LogIndentScope> m_logIndentScope;
-    DB::ResultOrder m_resultOrder;
+    GraphDB::ResultOrder m_resultOrder;
     std::vector<std::string> m_variablesNames;
-    DB::VecColumnNames m_columnNames;
+    GraphDB::VecColumnNames m_columnNames;
   };
   
   const bool printSQLRequests{true};
@@ -72,7 +72,7 @@ int main()
   };
 
   
-  DB db(onSQLQuery, onDBDiagnosticContent);
+  GraphDB db(onSQLQuery, onDBDiagnosticContent);
 
   {
     LogIndentScope _ = logScope(std::cout, "Creating Entity and Relationship types...");

@@ -64,13 +64,13 @@ std::vector<std::string> asStringVec(Labels const & labels)
 
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
-void runSingleQuery(const SingleQuery& q, DB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow)
+void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow)
 {
   bool sentColumns{};
   std::vector<std::string> variablesNames;
-  auto f = std::function{[&](const DB::ResultOrder& resultOrder,
-                             const DB::VecColumnNames& columnNames,
-                             const DB::VecValues& values){
+  auto f = std::function{[&](const GraphDB::ResultOrder& resultOrder,
+                             const GraphDB::VecColumnNames& columnNames,
+                             const GraphDB::VecValues& values){
     if(!sentColumns)
     {
       // resultOrder and columnNames will always be the same so we send them once only.

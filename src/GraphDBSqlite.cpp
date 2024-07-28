@@ -1,4 +1,4 @@
-#include "DBSqlite.h"
+#include "GraphDBSqlite.h"
 #include "Logs.h"
 #include "SqlAST.h"
 
@@ -27,7 +27,7 @@ struct hash<IDAndType>
 };
 }
 
-DB::DB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic)
+GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic)
 : m_fOnSQLQuery(fOnSQLQuery)
 , m_fOnDiagnostic(fOnDiagnostic)
 {
@@ -136,12 +136,12 @@ DB::DB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDi
 
 }
 
-DB::~DB()
+GraphDB::~GraphDB()
 {
   sqlite3_close(m_db);
 }
 
-void DB::addType(const std::string &typeName, bool isNode, const std::vector<std::string> &properties)
+void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<std::string> &properties)
 {
   {
     const std::string req = "DROP TABLE " + typeName + ";";
@@ -196,7 +196,7 @@ void DB::addType(const std::string &typeName, bool isNode, const std::vector<std
   // todo rollback if there is an error.
 }
 
-bool DB::prepareProperties(const std::string& typeName,
+bool GraphDB::prepareProperties(const std::string& typeName,
                            const std::vector<std::pair<std::string, std::string>>& propValues,
                            std::vector<std::string>& propertyNames,
                            std::vector<std::string>& propertyValues)
@@ -218,7 +218,7 @@ bool DB::prepareProperties(const std::string& typeName,
   return true;
 }
 
-bool DB::findValidProperties(const std::string& typeName,
+bool GraphDB::findValidProperties(const std::string& typeName,
                              const std::vector<std::string>& propNames,
                              std::vector<bool>& valid) const
 {
@@ -234,7 +234,7 @@ bool DB::findValidProperties(const std::string& typeName,
 }
 
 
-ID DB::addNode(const std::string& typeName,
+ID GraphDB::addNode(const std::string& typeName,
                const std::vector<std::pair<std::string, std::string>>& propValues)
 {
   const auto typeIdx = m_indexedNodeTypes.getIfExists(typeName);
@@ -263,7 +263,7 @@ ID DB::addNode(const std::string& typeName,
 }
 
 // There is a system table to generate relationship ids.
-ID DB::addRelationship(const std::string& typeName,
+ID GraphDB::addRelationship(const std::string& typeName,
                        const ID& originEntity,
                        const ID& destinationEntity,
                        const std::vector<std::pair<std::string, std::string>>& propValues)
@@ -323,7 +323,7 @@ ID DB::addRelationship(const std::string& typeName,
   return relId;
 }
 
-void DB::addElement(const std::string& typeName,
+void GraphDB::addElement(const std::string& typeName,
                     const ID& id,
                     const std::vector<std::pair<std::string, std::string>>& propValues)
 {
@@ -346,7 +346,7 @@ void DB::addElement(const std::string& typeName,
     throw std::logic_error(sqlite3_errstr(res));
 }
 
-void DB::print()
+void GraphDB::print()
 {
   std::vector<std::string> names;
   if(auto res = sqlite3_exec(m_db, "SELECT name FROM sqlite_master WHERE type='table';",
@@ -360,16 +360,16 @@ void DB::print()
   
   for(const auto & name: names)
   {
+    auto diagFunc = [](void *p_This, int argc, char **argv, char **column) {
+      static_cast<GraphDB*>(p_This)->m_fOnDiagnostic(argc, argv, column);
+      return 0;
+    };
     {
       std::ostringstream s;
       s << "SELECT * FROM " << name;
       const std::string req = s.str();
       m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(),
-                                 [](void *p_This, int argc, char **argv, char **column) {
-        static_cast<DB*>(p_This)->m_fOnDiagnostic(argc, argv, column);
-        return 0;
-      }, this, 0))
+      if(auto res = sqlite3_exec(m_db, req.c_str(), diagFunc, this, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
@@ -377,17 +377,13 @@ void DB::print()
       s << "PRAGMA table_info('" << name << "')";
       const std::string req = s.str();
       m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(),
-                                 [](void *p_This, int argc, char **argv, char **column) {
-        static_cast<DB*>(p_This)->m_fOnDiagnostic(argc, argv, column);
-        return 0;
-      }, this, 0))
+      if(auto res = sqlite3_exec(m_db, req.c_str(), diagFunc, this, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
   }
 }
 
-std::vector<std::string> DB::computeLabels(const Element elem, const std::vector<std::string>& inputLabels) const
+std::vector<std::string> GraphDB::computeLabels(const Element elem, const std::vector<std::string>& inputLabels) const
 {
   std::vector<std::string> labels = inputLabels;
   if(labels.empty())
@@ -407,7 +403,7 @@ std::vector<std::string> DB::computeLabels(const Element elem, const std::vector
   return labels;
 }
 
-std::vector<size_t> DB::labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const
+std::vector<size_t> GraphDB::labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const
 {
   std::vector<size_t> indices;
   switch(elem)
@@ -475,7 +471,7 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
 // Partitions filters found in |allFilters| into
 // |IDsFilters| containing filters that can be preapplied on IDs (when querying the relationships system table)
 // and |Filters| that must be applied when querying non-system tables.
-void DB::splitIDsFilters(const std::vector<const Expression*>* allFilters,
+void GraphDB::splitIDsFilters(const std::vector<const Expression*>* allFilters,
                          std::vector<const Expression*>& IDsFilters,
                          std::vector<const Expression*>& PostFilters) const
 {
@@ -487,7 +483,7 @@ void DB::splitIDsFilters(const std::vector<const Expression*>* allFilters,
     splitIDsFilters(*filter, IDsFilters, PostFilters);
 }
 
-void DB::splitIDsFilters(const Expression& filter,
+void GraphDB::splitIDsFilters(const Expression& filter,
                          std::vector<const Expression*>& IDsFilters,
                          std::vector<const Expression*>& PostFilters) const
 {
@@ -517,7 +513,7 @@ void DB::splitIDsFilters(const Expression& filter,
     PostFilters.push_back(&filter);
 }
 
-void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDirection,
+void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDirection,
                                            const std::vector<ReturnClauseTerm>& propertiesNode,
                                            const std::vector<ReturnClauseTerm>& propertiesRel,
                                            const std::vector<ReturnClauseTerm>& propertiesDualNode,
@@ -867,7 +863,7 @@ void DB::forEachNodeAndRelatedRelationship(const TraversalDirection traversalDir
   }
 }
 
-void DB::forEachElementPropertyWithLabelsIn(const Element elem,
+void GraphDB::forEachElementPropertyWithLabelsIn(const Element elem,
                                             const std::vector<ReturnClauseTerm>& returnClauseTerms,
                                             const std::vector<std::string>& inputLabels,
                                             const std::vector<const Expression*>* filter,
@@ -958,7 +954,7 @@ void DB::forEachElementPropertyWithLabelsIn(const Element elem,
   }
 }
 
-auto DB::computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses) -> ResultOrder
+auto GraphDB::computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses) -> ResultOrder
 {
   const size_t resultsSize = std::accumulate(vecReturnClauses.begin(),
                                              vecReturnClauses.end(),
