@@ -567,4 +567,102 @@ TEST(Test, WhereClauses)
   EXPECT_THROW(handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 OR a.age < 107 return a.age, b.age, r.since"), std::logic_error);
 }
 
+TEST(Test, Labels)
+{
+  
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  db.addType("WorksWith", false, {p_since});
+  
+  {
+    const std::string entityIDSource = db.addNode("Person", {{p_age, "5"}});
+    const std::string entityIDDestination = db.addNode("Person", {{p_age, "10"}});
+    const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "1234"}});
+    const std::string relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, {{p_since, "123444"}});
+  }
+  {
+    const std::string entityIDSource = db.addNode("Person", {{p_age, "105"}});
+    const std::string entityIDDestination = db.addNode("Person", {{p_age, "110"}});
+    const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "123456"}});
+    const std::string relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, {{p_since, "12345666"}});
+  }
+  
+  QueryResultsHandler handler(*dbWrapper);
+  
+  // Non-existing label on relationship
+  
+  handler.run("MATCH (a)-[r:NotHere]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(0, handler.countRows());
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  // Non-existing label on source entity
+  
+  handler.run("MATCH (a:NotHere)-[r]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(0, handler.countRows());
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  // Non-existing label on destination entity
+  
+  handler.run("MATCH (a)-[r]->(b:NotHere) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(0, handler.countRows());
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  // Non-existing label on destination entity (with existing labels on others)
+  
+  handler.run("MATCH (a:Person)-[r:Knows]->(b:NotHere) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(0, handler.countRows());
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r:Knows]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("105", handler.rows()[0][0]);
+  EXPECT_EQ("110", handler.rows()[0][1]);
+  EXPECT_EQ("123456", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+  
+  handler.run("MATCH (a:Person)-[r:Knows]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("105", handler.rows()[0][0]);
+  EXPECT_EQ("110", handler.rows()[0][1]);
+  EXPECT_EQ("123456", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+  
+  handler.run("MATCH (a:Person)-[r:Knows]->(b:Person) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("105", handler.rows()[0][0]);
+  EXPECT_EQ("110", handler.rows()[0][1]);
+  EXPECT_EQ("123456", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+  
+  handler.run("MATCH (a:Person)-[r:WorksWith]->(b:Person) WHERE r.since < 1234444 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("5", handler.rows()[0][0]);
+  EXPECT_EQ("10", handler.rows()[0][1]);
+  EXPECT_EQ("123444", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+}
+
 }

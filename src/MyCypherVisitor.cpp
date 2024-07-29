@@ -508,8 +508,8 @@ std::any MyCypherVisitor::visitOC_RelTypeName(CypherParser::OC_RelTypeNameContex
   for(const auto & child : context->children)
   {
     auto res = child->accept(this);
-    if(res.type() == typeid(Label))
-      return res;
+    if(res.type() == typeid(SchemaName))
+      return Label{std::move(std::any_cast<SchemaName>(res).symbolicName)};
   }
   return {};
 }
