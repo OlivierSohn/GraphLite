@@ -77,7 +77,7 @@ private:
 
 std::unique_ptr<GraphDB> createDB()
 {
-  const bool printSQLRequests{false};
+  const bool printSQLRequests{true};
   auto onSQLQuery = [=](const std::string& req)
   {
     if(printSQLRequests)

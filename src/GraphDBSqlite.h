@@ -155,5 +155,7 @@ private:
                   const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
 
   static ResultOrder computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses);
+
+  std::optional<std::set<size_t>> computeTypeFilter(const Element e, std::vector<std::string> const & nodeLabelsStr);
 };
 

@@ -156,7 +156,8 @@ int main()
     runCypher("MATCH (`n`)-[r]-(`m`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) AND n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`, id(m), id(r);");
     
     // todo write some unit tests
-    
+    // - verify the count of SQL queries is expected.
+
     // todo write some performance tests
     // - verify filtering on ids works as intended:
     //     using a very large graph, find nodes one hop away from a given node and compare with/without prefiltering on ids.
