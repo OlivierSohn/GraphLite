@@ -4,7 +4,7 @@
 #include "CypherQuery.h"
 #include "Logs.h"
 
-namespace test
+namespace openCypher::test
 {
 
 struct GraphWithStats
@@ -118,7 +118,9 @@ struct QueryResultsHandler
   
   size_t countRows() const { return m_rows.size(); }
   const auto& rows() const { return m_rows; }
-  
+
+  size_t countColumns() const { return m_resultOrder.size(); }
+
   size_t countSQLQueries() const { return m_db.totalSQLQueriesCount() - m_countSQLRequestsAtBeginning; }
 
 private:
@@ -393,8 +395,176 @@ TEST(Test, SingleNonRecursiveRelationship)
   EXPECT_EQ(1, handler.countSQLQueries());
 }
 
-TEST(Test, EntityProperties)
+TEST(Test, NullProperties)
 {
+  LogIndentScope _{};
   
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+
+  const std::string entityIDSource = db.addNode("Person", {});
+  const std::string entityIDDestination = db.addNode("Person", {});
+  const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {});
+
+  // querying some non-existing properties does require a SQL query on the typed table
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) return n.doesNotExist");
+  
+  EXPECT_EQ(2, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(std::nullopt, handler.rows()[0][0]);
+  EXPECT_EQ(std::nullopt, handler.rows()[1][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+
+  handler.run("MATCH (n) return n.age");
+  
+  EXPECT_EQ(2, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(std::nullopt, handler.rows()[0][0]);
+  EXPECT_EQ(std::nullopt, handler.rows()[1][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return r.doesNotExist");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(std::nullopt, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(std::nullopt, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
 }
+
+
+TEST(Test, NonNullProperties)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  
+  const std::string entityIDSource = db.addNode("Person", {{p_age, "5"}});
+  const std::string entityIDDestination = db.addNode("Person", {{p_age, "10"}});
+  const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "1234"}});
+  
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) return n.age");
+  
+  EXPECT_EQ(2, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  std::set<std::optional<std::string>> expectedAges{"5", "10"};
+  std::set<std::optional<std::string>> actualAges{handler.rows()[0][0], handler.rows()[1][0]};
+  EXPECT_EQ(expectedAges, actualAges);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ("1234", handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("5", handler.rows()[0][0]);
+  EXPECT_EQ("10", handler.rows()[0][1]);
+  EXPECT_EQ("1234", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+  
+  handler.run("MATCH (b)<-[r]-(a) return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("5", handler.rows()[0][0]);
+  EXPECT_EQ("10", handler.rows()[0][1]);
+  EXPECT_EQ("1234", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+}
+
+
+TEST(Test, WhereClauses)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+
+  {
+    const std::string entityIDSource = db.addNode("Person", {{p_age, "5"}});
+    const std::string entityIDDestination = db.addNode("Person", {{p_age, "10"}});
+    const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "1234"}});
+  }
+  {
+    const std::string entityIDSource = db.addNode("Person", {{p_age, "105"}});
+    const std::string entityIDDestination = db.addNode("Person", {{p_age, "110"}});
+    const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "123456"}});
+  }
+
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) WHERE n.age < 107 return n.age");
+  
+  EXPECT_EQ(3, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  std::set<std::optional<std::string>> expectedAges{"5", "10", "105"};
+  std::set<std::optional<std::string>> actualAges{handler.rows()[0][0], handler.rows()[1][0], handler.rows()[2][0]};
+  EXPECT_EQ(expectedAges, actualAges);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() WHERE r.since > 12345 return r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ("123456", handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("105", handler.rows()[0][0]);
+  EXPECT_EQ("110", handler.rows()[0][1]);
+  EXPECT_EQ("123456", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+  
+  handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ("105", handler.rows()[0][0]);
+  EXPECT_EQ("110", handler.rows()[0][1]);
+  EXPECT_EQ("123456", handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+  
+  // not supported yet: "A non-equi-var expression is using non-id properties"
+  EXPECT_THROW(handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 OR a.age < 107 return a.age, b.age, r.since"), std::logic_error);
+}
+
 }

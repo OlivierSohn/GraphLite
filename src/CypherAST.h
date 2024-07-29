@@ -134,6 +134,9 @@ struct PropertyKeyName
     return a.symbolicName == b.symbolicName;
   }
 };
+inline PropertyKeyName mkProperty(std::string const & name){
+  return PropertyKeyName{SymbolicName{name}};
+}
 
 inline std::ostream& operator<<(std::ostream& os, const PropertyKeyName& p)
 {

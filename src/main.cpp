@@ -80,12 +80,7 @@ int main()
   
   GraphDB db(onSQLQuery, onDBDiagnosticContent);
 
-  auto mkProperty = [](std::string const & name){
-    using openCypher::PropertyKeyName;
-    using openCypher::SymbolicName;
-    return PropertyKeyName{SymbolicName{name}};
-  };
-
+  using openCypher::mkProperty;
   const auto p_test = mkProperty("test");
   const auto p_what = mkProperty("what");
   const auto p_testRel = mkProperty("testRel");
