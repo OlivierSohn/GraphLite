@@ -639,14 +639,15 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   // https://stackoverflow.com/a/65647734/3940228
   // This will be needed when the cypher query has a LIMIT clause.
 
-  // 1. Scan the system table of relationships to gather callerRows
+  // 1. Scan the system table of relationships to gather candidate rows
 
-  using CallersRows =
-  std::unordered_map<IDAndType /*node*/,
-    std::unordered_map<IDAndType /*dual node*/,
-  std::vector<IDAndType /*relationship*/>>>;
+  struct CandidateRow{
+    // 0 : node, 1 : relationship, 2 : dual node
+    std::array<IDAndType, 3> idsAndTypes;
+  };
+  using CandidateRows = std::vector<CandidateRow>;
 
-  CallersRows callerRows;
+  CandidateRows candidateRows;
 
   // Filter relationships based on
   // - nodeLabelsStr
@@ -679,34 +680,18 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   {
     struct RelationshipQueryInfo{
       std::chrono::steady_clock::duration& totalSystemRelationshipCbDuration;
-      CallersRows & callerRows;
-      std::optional<unsigned> indexRelationshipID;
+      CandidateRows & candidateRows;
       std::optional<unsigned> indexNodeID;
+      std::optional<unsigned> indexRelationshipID;
       std::optional<unsigned> indexDualNodeID;
-      std::optional<unsigned> indexRelationshipType;
       std::optional<unsigned> indexNodeType;
+      std::optional<unsigned> indexRelationshipType;
       std::optional<unsigned> indexDualNodeType;
-    } queryInfo{m_totalSystemRelationshipCbDuration, callerRows};
+    } queryInfo{m_totalSystemRelationshipCbDuration, candidateRows};
 
     std::ostringstream s;
     s << "SELECT ";
     unsigned index{};
-    if(lookupRelsProperties)
-    {
-      if(index)
-        s << ", ";
-      s << "relationships.SYS__ID";
-      queryInfo.indexRelationshipID = index;
-      ++index;
-    }
-    if(relNeedsTypeInfo)
-    {
-      if(index)
-        s << ", ";
-      s << "RelationshipType";
-      queryInfo.indexRelationshipType = index;
-      ++index;
-    }
     if(lookupNodesProperties)
     {
       if(index)
@@ -721,6 +706,22 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
         s << ", ";
       s << "nodes.NodeType";
       queryInfo.indexNodeType = index;
+      ++index;
+    }
+    if(lookupRelsProperties)
+    {
+      if(index)
+        s << ", ";
+      s << "relationships.SYS__ID";
+      queryInfo.indexRelationshipID = index;
+      ++index;
+    }
+    if(relNeedsTypeInfo)
+    {
+      if(index)
+        s << ", ";
+      s << "RelationshipType";
+      queryInfo.indexRelationshipType = index;
       ++index;
     }
     if(lookupDualNodesProperties)
@@ -805,20 +806,20 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
       const auto t1 = std::chrono::system_clock::now();
 
       auto & queryInfo = *static_cast<RelationshipQueryInfo*>(p_queryInfo);
-      auto relKey = IDAndType{
-        queryInfo.indexRelationshipID.has_value() ? argv[*queryInfo.indexRelationshipID] : std::string{},
-        queryInfo.indexRelationshipType.has_value() ? static_cast<size_t>(std::atoll(argv[*queryInfo.indexRelationshipType])) : 0ull
-      };
-      auto nodeKey = IDAndType{
+      auto & candidateRow = queryInfo.candidateRows.emplace_back();
+      candidateRow.idsAndTypes[0] = IDAndType{
         queryInfo.indexNodeID.has_value() ? argv[*queryInfo.indexNodeID] : std::string{},
         queryInfo.indexNodeType.has_value() ? static_cast<size_t>(std::atoll(argv[*queryInfo.indexNodeType])) : 0ull
       };
-      auto dualNodeKey = IDAndType{
+      candidateRow.idsAndTypes[1] = IDAndType{
+        queryInfo.indexRelationshipID.has_value() ? argv[*queryInfo.indexRelationshipID] : std::string{},
+        queryInfo.indexRelationshipType.has_value() ? static_cast<size_t>(std::atoll(argv[*queryInfo.indexRelationshipType])) : 0ull
+      };
+      candidateRow.idsAndTypes[2] = IDAndType{
         queryInfo.indexDualNodeID.has_value() ? argv[*queryInfo.indexDualNodeID] : std::string{},
         queryInfo.indexDualNodeType.has_value() ? static_cast<size_t>(std::atoll(argv[*queryInfo.indexDualNodeType])) : 0ull
       };
-      queryInfo.callerRows[std::move(nodeKey)][std::move(dualNodeKey)].push_back(std::move(relKey));
-
+ 
       const auto duration = std::chrono::system_clock::now() - t1;
       queryInfo.totalSystemRelationshipCbDuration += duration;
       return 0;
@@ -826,11 +827,21 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
       throw std::logic_error(msg);
   }
 
+  // split nodes, dualNodes, relationships by types
+  
+  std::unordered_map<size_t /*node type*/, std::unordered_set<ID> /* node ids*/> nodesByTypes;
+  std::unordered_map<size_t /*node type*/, std::unordered_set<ID> /* node ids*/> dualNodesByTypes;
+  std::unordered_map<size_t /*rel type*/, std::vector<ID> /* rel ids*/> relsByTypes;
+
   std::unordered_map<ID, std::vector<std::optional<std::string>>> nodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
 
-  if(!nodeNeedsTypeInfo && lookupNodesProperties)
+  const bool nodeOnlyReturnsId = !nodeNeedsTypeInfo && lookupNodesProperties;
+  const bool relOnlyReturnsId = !relNeedsTypeInfo && lookupRelsProperties;
+  const bool dualNodeOnlyReturnsId = !dualNodeNeedsTypeInfo && lookupDualNodesProperties;
+
+  if(nodeOnlyReturnsId)
   {
     // means we return only the id (sanity check this) and no post filtering occurs.
     const auto countReturnedProps = propertiesNode.size();
@@ -839,23 +850,8 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     for(const auto & p : propertiesNode)
       if(p.propertyName != idProperty)
         throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo but has some non-id property returned.");
-    for(const auto & [nodeIdAndType, dualNodeIdAndRelsIdsAndTypes] : callerRows)
-      nodeProperties[nodeIdAndType.id].resize(countReturnedProps, nodeIdAndType.id);
   }
-  if(!dualNodeNeedsTypeInfo && lookupDualNodesProperties)
-  {
-    // means we return only the id (sanity check this) and no post filtering occurs.
-    const auto countReturnedProps = propertiesDualNode.size();
-    if(countReturnedProps == 0)
-      throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo && lookupDualNodesProperties but has no id property returned.");
-    for(const auto & p : propertiesDualNode)
-      if(p.propertyName != idProperty)
-        throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo but has some non-id property returned.");
-    for(const auto & [_, dualNodeIdAndRelsIdsAndTypes] : callerRows)
-      for(const auto & [dualNodeIdAndType, _] : dualNodeIdAndRelsIdsAndTypes)
-        dualNodeProperties[dualNodeIdAndType.id].resize(countReturnedProps, dualNodeIdAndType.id);
-  }
-  if(!relNeedsTypeInfo && lookupRelsProperties)
+  if(relOnlyReturnsId)
   {
     // means we return only the id (sanity check this) and no post filtering occurs.
     const auto countReturnedProps = propertiesRel.size();
@@ -864,32 +860,50 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     for(const auto & p : propertiesRel)
       if(p.propertyName != idProperty)
         throw std::logic_error("[Unexpected] !relNeedsTypeInfo but has some non-id property returned.");
-    for(const auto & [_, dualNodeIdAndRelsIdsAndTypes] : callerRows)
-      for(const auto & [_, relsIdsAndTypes] : dualNodeIdAndRelsIdsAndTypes)
-        for(const auto & relIdAndType : relsIdsAndTypes)
-          relProperties[relIdAndType.id].resize(countReturnedProps, relIdAndType.id);
   }
-  
-  // split nodes, dualNodes, relationships by types
-
-  std::unordered_map<size_t /*node type*/, std::vector<ID> /* node ids*/> nodesByTypes;
-  std::unordered_map<size_t /*node type*/, std::unordered_set<ID> /* node ids*/> dualNodesByTypes;
-  std::unordered_map<size_t /*rel type*/, std::vector<ID> /* rel ids*/> relsByTypes;
-  
-  for(const auto & [nodeIdAndType, dualNodeIdAndRelsIdsAndTypes] : callerRows)
+  if(dualNodeOnlyReturnsId)
   {
-    if(nodeNeedsTypeInfo && lookupNodesProperties)
-      nodesByTypes[nodeIdAndType.type].push_back(nodeIdAndType.id);
+    // means we return only the id (sanity check this) and no post filtering occurs.
+    const auto countReturnedProps = propertiesDualNode.size();
+    if(countReturnedProps == 0)
+      throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo && lookupDualNodesProperties but has no id property returned.");
+    for(const auto & p : propertiesDualNode)
+      if(p.propertyName != idProperty)
+        throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo but has some non-id property returned.");
+  }
 
-    for(const auto & [dualNodeIdAndType, relsIdsAndTypes] : dualNodeIdAndRelsIdsAndTypes)
+  const auto countNodeReturnedProps = propertiesNode.size();
+  const auto countRelReturnedProps = propertiesRel.size();
+  const auto countDualNodeReturnedProps = propertiesDualNode.size();
+  for(const auto & candidateRow : candidateRows)
+  {
+    if(nodeOnlyReturnsId)
     {
-      if(dualNodeNeedsTypeInfo && lookupDualNodesProperties)
-        dualNodesByTypes[dualNodeIdAndType.type].insert(dualNodeIdAndType.id);
-
-      if(relNeedsTypeInfo && lookupRelsProperties)
-        for(const auto & relIdAndType : relsIdsAndTypes)
-          relsByTypes[relIdAndType.type].push_back(relIdAndType.id);
+      // TODO: instead of storing in nodeProperties, when we return results we should construct the vectors then.
+      auto res = nodeProperties.try_emplace(candidateRow.idsAndTypes[0].id);
+      if(res.second)
+        res.first->second.resize(countNodeReturnedProps, candidateRow.idsAndTypes[0].id);
     }
+    else if(nodeNeedsTypeInfo && lookupNodesProperties)
+      nodesByTypes[candidateRow.idsAndTypes[0].type].insert(candidateRow.idsAndTypes[0].id);
+
+    if(relOnlyReturnsId)
+    {
+      auto res = relProperties.try_emplace(candidateRow.idsAndTypes[1].id);
+      if(res.second)
+        res.first->second.resize(countRelReturnedProps, candidateRow.idsAndTypes[1].id);
+    }
+    else if(relNeedsTypeInfo && lookupRelsProperties)
+      relsByTypes[candidateRow.idsAndTypes[1].type].push_back(candidateRow.idsAndTypes[1].id);
+
+    if(dualNodeOnlyReturnsId)
+    {
+      auto res = dualNodeProperties.try_emplace(candidateRow.idsAndTypes[2].id);
+      if(res.second)
+        res.first->second.resize(countDualNodeReturnedProps, candidateRow.idsAndTypes[2].id);
+    }
+    else if(dualNodeNeedsTypeInfo && lookupDualNodesProperties)
+      dualNodesByTypes[candidateRow.idsAndTypes[2].type].insert(candidateRow.idsAndTypes[2].id);
   }
 
   // (todo in parallel)
@@ -1067,40 +1081,35 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   for(auto & v : vecValues)
     v = &emptyVec;
 
-  for(const auto & [nodeIdAndType, dualNodeAndRelsIDsAndTypes] : callerRows)
+  for(const auto & candidateRow : candidateRows)
   {
     if(lookupNodesProperties)
     {
-      const auto itNodeProperties = nodeProperties.find(nodeIdAndType.id);
+      const auto itNodeProperties = nodeProperties.find(candidateRow.idsAndTypes[0].id);
       if(itNodeProperties == nodeProperties.end())
         continue;
       vecValues[0] = &itNodeProperties->second;
     }
-    for(const auto & [dualNodeIdAndType, relsIDsAndTypes] : dualNodeAndRelsIDsAndTypes)
+
+    if(lookupRelsProperties)
     {
-      if(lookupDualNodesProperties)
-      {
-        const auto itDualNodeProperties = dualNodeProperties.find(dualNodeIdAndType.id);
-        if (itDualNodeProperties == dualNodeProperties.end())
-          continue;
-        else
-          vecValues[2] = &itDualNodeProperties->second;
-      }
-      for(const auto & relIDAndType : relsIDsAndTypes)
-      {
-        if(lookupRelsProperties)
-        {
-          const auto itRelProperties = relProperties.find(relIDAndType.id);
-          if(itRelProperties == relProperties.end())
-            continue;
-          vecValues[1] = &itRelProperties->second;
-        }
-        
-        f(resultOrder,
-          vecColumnNames,
-          vecValues);
-      }
+      const auto itRelProperties = relProperties.find(candidateRow.idsAndTypes[1].id);
+      if(itRelProperties == relProperties.end())
+        continue;
+      vecValues[1] = &itRelProperties->second;
     }
+
+    if(lookupDualNodesProperties)
+    {
+      const auto itDualNodeProperties = dualNodeProperties.find(candidateRow.idsAndTypes[2].id);
+      if (itDualNodeProperties == dualNodeProperties.end())
+        continue;
+      else
+        vecValues[2] = &itDualNodeProperties->second;
+    }        
+    f(resultOrder,
+      vecColumnNames,
+      vecValues);
   }
 }
 
