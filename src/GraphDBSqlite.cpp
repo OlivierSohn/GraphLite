@@ -833,76 +833,15 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   std::unordered_map<size_t /*node type*/, std::unordered_set<ID> /* node ids*/> dualNodesByTypes;
   std::unordered_map<size_t /*rel type*/, std::vector<ID> /* rel ids*/> relsByTypes;
 
-  std::unordered_map<ID, std::vector<std::optional<std::string>>> nodeProperties;
-  std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
-  std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
-
-  const bool nodeOnlyReturnsId = !nodeNeedsTypeInfo && lookupNodesProperties;
-  const bool relOnlyReturnsId = !relNeedsTypeInfo && lookupRelsProperties;
-  const bool dualNodeOnlyReturnsId = !dualNodeNeedsTypeInfo && lookupDualNodesProperties;
-
-  if(nodeOnlyReturnsId)
-  {
-    // means we return only the id (sanity check this) and no post filtering occurs.
-    const auto countReturnedProps = propertiesNode.size();
-    if(countReturnedProps == 0)
-      throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo && lookupNodesProperties but has no id property returned.");
-    for(const auto & p : propertiesNode)
-      if(p.propertyName != idProperty)
-        throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo but has some non-id property returned.");
-  }
-  if(relOnlyReturnsId)
-  {
-    // means we return only the id (sanity check this) and no post filtering occurs.
-    const auto countReturnedProps = propertiesRel.size();
-    if(countReturnedProps == 0)
-      throw std::logic_error("[Unexpected] !relNeedsTypeInfo && lookupRelsProperties but has no id property returned.");
-    for(const auto & p : propertiesRel)
-      if(p.propertyName != idProperty)
-        throw std::logic_error("[Unexpected] !relNeedsTypeInfo but has some non-id property returned.");
-  }
-  if(dualNodeOnlyReturnsId)
-  {
-    // means we return only the id (sanity check this) and no post filtering occurs.
-    const auto countReturnedProps = propertiesDualNode.size();
-    if(countReturnedProps == 0)
-      throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo && lookupDualNodesProperties but has no id property returned.");
-    for(const auto & p : propertiesDualNode)
-      if(p.propertyName != idProperty)
-        throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo but has some non-id property returned.");
-  }
-
-  const auto countNodeReturnedProps = propertiesNode.size();
-  const auto countRelReturnedProps = propertiesRel.size();
-  const auto countDualNodeReturnedProps = propertiesDualNode.size();
   for(const auto & candidateRow : candidateRows)
   {
-    if(nodeOnlyReturnsId)
-    {
-      // TODO: instead of storing in nodeProperties, when we return results we should construct the vectors then.
-      auto res = nodeProperties.try_emplace(candidateRow.idsAndTypes[0].id);
-      if(res.second)
-        res.first->second.resize(countNodeReturnedProps, candidateRow.idsAndTypes[0].id);
-    }
-    else if(nodeNeedsTypeInfo && lookupNodesProperties)
+    if(nodeNeedsTypeInfo && lookupNodesProperties)
       nodesByTypes[candidateRow.idsAndTypes[0].type].insert(candidateRow.idsAndTypes[0].id);
 
-    if(relOnlyReturnsId)
-    {
-      auto res = relProperties.try_emplace(candidateRow.idsAndTypes[1].id);
-      if(res.second)
-        res.first->second.resize(countRelReturnedProps, candidateRow.idsAndTypes[1].id);
-    }
-    else if(relNeedsTypeInfo && lookupRelsProperties)
+    if(relNeedsTypeInfo && lookupRelsProperties)
       relsByTypes[candidateRow.idsAndTypes[1].type].push_back(candidateRow.idsAndTypes[1].id);
 
-    if(dualNodeOnlyReturnsId)
-    {
-      auto res = dualNodeProperties.try_emplace(candidateRow.idsAndTypes[2].id);
-      if(res.second)
-        res.first->second.resize(countDualNodeReturnedProps, candidateRow.idsAndTypes[2].id);
-    }
-    else if(dualNodeNeedsTypeInfo && lookupDualNodesProperties)
+    if(dualNodeNeedsTypeInfo && lookupDualNodesProperties)
       dualNodesByTypes[candidateRow.idsAndTypes[2].type].insert(candidateRow.idsAndTypes[2].id);
   }
 
@@ -1047,6 +986,10 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     }
   };
 
+  std::unordered_map<ID, std::vector<std::optional<std::string>>> nodeProperties;
+  std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
+  std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
+
   if(nodeNeedsTypeInfo && lookupNodesProperties)
     gatherPropertyValues(nodeVar, nodesByTypes, Element::Node, strPropertiesNode, nodeProperties);
   if(dualNodeNeedsTypeInfo && lookupDualNodesProperties)
@@ -1073,40 +1016,95 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   vecReturnClauses.push_back(&propertiesRel);
   vecReturnClauses.push_back(&propertiesDualNode);
 
-  vecValues.resize(vecReturnClauses.size());
+  const auto countNodeReturnedProps = propertiesNode.size();
+  const auto countRelReturnedProps = propertiesRel.size();
+  const auto countDualNodeReturnedProps = propertiesDualNode.size();
+  
+  std::vector<std::optional<std::string>> nodePropertyValues(countNodeReturnedProps);
+  std::vector<std::optional<std::string>> relPropertyValues(countRelReturnedProps);
+  std::vector<std::optional<std::string>> dualNodePropertyValues(countDualNodeReturnedProps);
+
+  vecValues.push_back(&nodePropertyValues);
+  vecValues.push_back(&relPropertyValues);
+  vecValues.push_back(&dualNodePropertyValues);
 
   const ResultOrder resultOrder = computeResultOrder(vecReturnClauses);
 
-  const auto emptyVec = std::vector<std::optional<std::string>>{};
-  for(auto & v : vecValues)
-    v = &emptyVec;
+  const bool nodeOnlyReturnsId = !nodeNeedsTypeInfo && lookupNodesProperties;
+  const bool relOnlyReturnsId = !relNeedsTypeInfo && lookupRelsProperties;
+  const bool dualNodeOnlyReturnsId = !dualNodeNeedsTypeInfo && lookupDualNodesProperties;
+  
+  if(nodeOnlyReturnsId)
+  {
+    // means we return only the id (sanity check this) and no post filtering occurs.
+    const auto countReturnedProps = propertiesNode.size();
+    if(countReturnedProps == 0)
+      throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo && lookupNodesProperties but has no id property returned.");
+    for(const auto & p : propertiesNode)
+      if(p.propertyName != idProperty)
+        throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo but has some non-id property returned.");
+  }
+  if(relOnlyReturnsId)
+  {
+    // means we return only the id (sanity check this) and no post filtering occurs.
+    const auto countReturnedProps = propertiesRel.size();
+    if(countReturnedProps == 0)
+      throw std::logic_error("[Unexpected] !relNeedsTypeInfo && lookupRelsProperties but has no id property returned.");
+    for(const auto & p : propertiesRel)
+      if(p.propertyName != idProperty)
+        throw std::logic_error("[Unexpected] !relNeedsTypeInfo but has some non-id property returned.");
+  }
+  if(dualNodeOnlyReturnsId)
+  {
+    // means we return only the id (sanity check this) and no post filtering occurs.
+    const auto countReturnedProps = propertiesDualNode.size();
+    if(countReturnedProps == 0)
+      throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo && lookupDualNodesProperties but has no id property returned.");
+    for(const auto & p : propertiesDualNode)
+      if(p.propertyName != idProperty)
+        throw std::logic_error("[Unexpected] !dualNodeNeedsTypeInfo but has some non-id property returned.");
+  }
 
   for(const auto & candidateRow : candidateRows)
   {
     if(lookupNodesProperties)
     {
-      const auto itNodeProperties = nodeProperties.find(candidateRow.idsAndTypes[0].id);
-      if(itNodeProperties == nodeProperties.end())
-        continue;
-      vecValues[0] = &itNodeProperties->second;
+      if(nodeOnlyReturnsId)
+        std::fill(nodePropertyValues.begin(), nodePropertyValues.end(), candidateRow.idsAndTypes[0].id);
+      else
+      {
+        const auto itNodeProperties = nodeProperties.find(candidateRow.idsAndTypes[0].id);
+        if(itNodeProperties == nodeProperties.end())
+          continue;
+        vecValues[0] = &itNodeProperties->second;
+      }
     }
 
     if(lookupRelsProperties)
     {
-      const auto itRelProperties = relProperties.find(candidateRow.idsAndTypes[1].id);
-      if(itRelProperties == relProperties.end())
-        continue;
-      vecValues[1] = &itRelProperties->second;
+      if(relOnlyReturnsId)
+        std::fill(relPropertyValues.begin(), relPropertyValues.end(), candidateRow.idsAndTypes[1].id);
+      else
+      {
+        const auto itRelProperties = relProperties.find(candidateRow.idsAndTypes[1].id);
+        if(itRelProperties == relProperties.end())
+          continue;
+        vecValues[1] = &itRelProperties->second;
+      }
     }
 
     if(lookupDualNodesProperties)
     {
-      const auto itDualNodeProperties = dualNodeProperties.find(candidateRow.idsAndTypes[2].id);
-      if (itDualNodeProperties == dualNodeProperties.end())
-        continue;
-      else
-        vecValues[2] = &itDualNodeProperties->second;
-    }        
+      if(dualNodeOnlyReturnsId)
+        std::fill(dualNodePropertyValues.begin(), dualNodePropertyValues.end(), candidateRow.idsAndTypes[2].id);
+      else{
+        const auto itDualNodeProperties = dualNodeProperties.find(candidateRow.idsAndTypes[2].id);
+        if (itDualNodeProperties == dualNodeProperties.end())
+          continue;
+        else
+          vecValues[2] = &itDualNodeProperties->second;
+      }
+    }
     f(resultOrder,
       vecColumnNames,
       vecValues);
