@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <chrono>
 
 #include "GraphDBSqlite.h"
 #include "CypherQuery.h"
@@ -14,20 +15,23 @@ struct GraphWithStats
   GraphDB& getDB() { return *m_graph; }
 
   size_t totalSQLQueriesCount() const { return m_countSQLQueries; }
+
+  bool m_printSQLRequests{false};
+  bool m_printSQLRequestsDuration{false};
 private:
   std::unique_ptr<GraphDB> m_graph;
   size_t m_countSQLQueries{};
 
-  bool m_printSQLRequests{true};
 };
 
 GraphWithStats::GraphWithStats()
 {
-  auto onSQLQuery = [&](const std::string& req)
+  auto onSQLQuery = [&](const std::string& reqLarge)
   {
     ++m_countSQLQueries;
     if(m_printSQLRequests)
     {
+      auto req = reqLarge.substr(0, 300);
       bool first = true;
       for(const auto & part1 : splitOn("UNION ALL ", req))
         for(const auto & part : splitOn("INNER JOIN ", part1))
@@ -44,6 +48,13 @@ GraphWithStats::GraphWithStats()
         }
     }
   };
+  auto onSQLQueryDuration = [&](const std::chrono::steady_clock::duration d)
+  {
+    if(m_printSQLRequestsDuration)
+    {
+      std::cout << std::chrono::duration_cast<std::chrono::microseconds>(d).count() << " us" << std::endl;
+    }
+  };
   auto onDBDiagnosticContent = [&](int argc, char **argv, char **column)
   {
     if(m_printSQLRequests)
@@ -57,7 +68,7 @@ GraphWithStats::GraphWithStats()
     return 0;
   };
 
-  m_graph = std::make_unique<GraphDB>(onSQLQuery, onDBDiagnosticContent);
+  m_graph = std::make_unique<GraphDB>(onSQLQuery, onSQLQueryDuration, onDBDiagnosticContent);
 }
 
 
@@ -69,7 +80,23 @@ struct QueryResultsHandler
   
   void run(const std::string &cypherQuery)
   {
+    auto sqlDuration1 = m_db.getDB().m_totalSQLQueryExecutionDuration;
+    auto relCbDuration1 = m_db.getDB().m_totalSystemRelationshipCbDuration;
+    auto propCbDuration1 = m_db.getDB().m_totalPropertyTablesCbDuration;
+
+    auto t1 = std::chrono::steady_clock::now();
+
     openCypher::runCypher(cypherQuery, m_db.getDB(), *this);
+
+    m_cypherQueryDuration = std::chrono::steady_clock::now() - t1;
+
+    auto sqlDuration2 = m_db.getDB().m_totalSQLQueryExecutionDuration;
+    auto relCbDuration2 = m_db.getDB().m_totalSystemRelationshipCbDuration;
+    auto propCbDuration2 = m_db.getDB().m_totalPropertyTablesCbDuration;
+
+    m_sqlQueriesExecutionDuration = sqlDuration2 - sqlDuration1;
+    m_sqlRelCbDuration = relCbDuration2 - relCbDuration1;
+    m_sqlPropCbDuration = propCbDuration2 - propCbDuration1;
   }
   
   bool printCypherAST() const { return false; }
@@ -122,6 +149,11 @@ struct QueryResultsHandler
   size_t countColumns() const { return m_resultOrder.size(); }
 
   size_t countSQLQueries() const { return m_db.totalSQLQueriesCount() - m_countSQLRequestsAtBeginning; }
+
+  std::chrono::steady_clock::duration m_cypherQueryDuration{};
+  std::chrono::steady_clock::duration m_sqlQueriesExecutionDuration{};
+  std::chrono::steady_clock::duration m_sqlRelCbDuration{};
+  std::chrono::steady_clock::duration m_sqlPropCbDuration{};
 
 private:
   std::unique_ptr<LogIndentScope> m_logIndentScope;
@@ -514,10 +546,12 @@ TEST(Test, WhereClauses)
   db.addType("Person", true, {p_age});
   db.addType("Knows", false, {p_since});
 
+  std::string entityIDSource5;
+  std::string RelID;
   {
-    const std::string entityIDSource = db.addNode("Person", {{p_age, "5"}});
+    entityIDSource5 = db.addNode("Person", {{p_age, "5"}});
     const std::string entityIDDestination = db.addNode("Person", {{p_age, "10"}});
-    const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "1234"}});
+    RelID = db.addRelationship("Knows", entityIDSource5, entityIDDestination, {{p_since, "1234"}});
   }
   {
     const std::string entityIDSource = db.addNode("Person", {{p_age, "105"}});
@@ -542,7 +576,29 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(1, handler.countColumns());
   EXPECT_EQ("123456", handler.rows()[0][0]);
   EXPECT_EQ(1, handler.countSQLQueries());
+
+  handler.run("MATCH (a)-[r]->(b) WHERE id(a) = id(b) return a.age, b.age, r.since");
   
+  EXPECT_EQ(0, handler.countRows());
+  EXPECT_EQ(1, handler.countSQLQueries());
+
+  handler.run("MATCH (a)-[r]->(b) WHERE id(b) = " + entityIDSource5 + " return a.age, b.age, r.since");
+  
+  EXPECT_EQ(0, handler.countRows());
+  EXPECT_EQ(1, handler.countSQLQueries());
+
+  handler.run("MATCH (a)-[r]->(b) WHERE id(a) = " + entityIDSource5 + " return a.age, b.age, r.since, id(a), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(5, handler.countColumns());
+  EXPECT_EQ("5", handler.rows()[0][0]);
+  EXPECT_EQ("10", handler.rows()[0][1]);
+  EXPECT_EQ("1234", handler.rows()[0][2]);
+  EXPECT_EQ(entityIDSource5, handler.rows()[0][3]);
+  EXPECT_EQ(RelID, handler.rows()[0][4]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+
   handler.run("MATCH (a)-[r]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(1, handler.countRows());
@@ -567,9 +623,80 @@ TEST(Test, WhereClauses)
   EXPECT_THROW(handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 OR a.age < 107 return a.age, b.age, r.since"), std::logic_error);
 }
 
+TEST(Test, WhereClausesOptimized)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  /*
+
+   A1   A2   A3
+   |^   |^   |^
+   v|   v|   v|
+   B1   B2   B3
+
+   */
+  const auto p_propA = mkProperty("propA");
+  const auto p_propB = mkProperty("propB");
+  db.addType("EntityA", true, {p_propA});
+  db.addType("EntityB", true, {p_propB});
+  db.addType("RelAB", false, {p_propA});
+  db.addType("RelBA", false, {p_propB});
+  
+  {
+    const std::string entityA1 = db.addNode("EntityA", {{p_propA, "1"}});
+    const std::string entityA2 = db.addNode("EntityA", {{p_propA, "2"}});
+    const std::string entityA3 = db.addNode("EntityA", {{p_propA, "3"}});
+
+    const std::string entityB1 = db.addNode("EntityB", {{p_propB, "1"}});
+    const std::string entityB2 = db.addNode("EntityB", {{p_propB, "2"}});
+    const std::string entityB3 = db.addNode("EntityB", {{p_propB, "3"}});
+
+    db.addRelationship("RelAB", entityA1, entityB1, {{p_propA, "10"}});
+    db.addRelationship("RelAB", entityA2, entityB2, {{p_propA, "20"}});
+    db.addRelationship("RelAB", entityA3, entityB3, {{p_propA, "30"}});
+    
+    db.addRelationship("RelBA", entityB1, entityA1, {{p_propB, "10"}});
+    db.addRelationship("RelBA", entityB2, entityA2, {{p_propB, "20"}});
+    db.addRelationship("RelBA", entityB3, entityA3, {{p_propB, "30"}});
+  }
+  
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) WHERE n.propA <= 2 return n.propA");
+  
+  EXPECT_EQ(2, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  {
+    std::set<std::optional<std::string>> expected{"1", "2"};
+    std::set<std::optional<std::string>> actual{handler.rows()[0][0], handler.rows()[1][0]};
+    EXPECT_EQ(expected, actual);
+  }
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n)-[r]->() WHERE n.propA <= 2.5 AND n.propA >= 1.5 return n.propA, r.propA");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ("2", handler.rows()[0][0]);
+  EXPECT_EQ("20", handler.rows()[0][1]);
+  EXPECT_EQ(3, handler.countSQLQueries()); // one for the system relationships table, one for EntityA table, one for RelAB table
+  // The reason the table EntityB is not queried is because the where clause evaluates to false in this table (propA is not a field of this table)
+
+  handler.run("MATCH (n)-[r]->() WHERE n.propA <= 2.5 AND r.propA >= 15 return n.propA, r.propA");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ("2", handler.rows()[0][0]);
+  EXPECT_EQ("20", handler.rows()[0][1]);
+  EXPECT_EQ(3, handler.countSQLQueries()); // one for the system relationships table, one for EntityA table, one for RelAB table
+  // The reason the table EntityB is not queried is because the where clause evaluates to false in this table (propA is not a field of this table)
+}
+
 TEST(Test, Labels)
 {
-  
   LogIndentScope _{};
   
   auto dbWrapper = std::make_unique<GraphWithStats>();
@@ -663,6 +790,70 @@ TEST(Test, Labels)
   EXPECT_EQ("123444", handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
+
+  handler.run("MATCH (a:Person)-[r]->(b) WHERE b.age < 107 return a.age, b.age, r.since");
+  
+  EXPECT_EQ(2, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+}
+
+
+TEST(Test, Perfs)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  dbWrapper->m_printSQLRequests = false;
+
+  auto & db = dbWrapper->getDB();
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  db.addType("WorksWith", false, {p_since});
+  
+  // 5 ms per iteration without a transaction
+  // 0.1 ms per iteration with a transaction
+  // Ideally we should have one transaction per ~10000 inserts.
+  size_t countRels{};
+  for(int i=0; i<50; ++i)
+  {
+    std::cout << i << ".";
+    db.beginTransaction();
+    for(size_t i=0; i<2000; ++i)
+    {
+      const std::string entityIDSource = db.addNode("Person", {{p_age, "5"}});
+      const std::string entityIDDestination = db.addNode("Person", {{p_age, "10"}});
+      const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "1234"}});
+      const std::string relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, {{p_since, "123444"}});
+      countRels += 2;
+    }
+    db.endTransaction();
+  }
+  std::cout << std::endl;
+  std::cout << countRels << " relationships" << std::endl;
+
+  //dbWrapper->m_printSQLRequests = true;
+
+  QueryResultsHandler handler(*dbWrapper);
+  
+  // Non-existing label on relationship
+  
+  dbWrapper->m_printSQLRequestsDuration = true;
+  dbWrapper->m_printSQLRequests = true;
+  handler.run("MATCH (a)-[r]->(b) WHERE a.age < 107 return a.age, b.age, r.since");
+  
+  std::cout << handler.countRows() << " rows fetched in ";
+  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_cypherQueryDuration).count() << " us using ";
+  std::cout << handler.countSQLQueries() << " SQL queries that ran in ";
+  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlQueriesExecutionDuration).count() << " us" << std::endl;
+  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlRelCbDuration).count() << " us" << std::endl;
+  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlPropCbDuration).count() << " us" << std::endl;
+
+  // time for SQL queries execution only:
+  
 }
 
 }

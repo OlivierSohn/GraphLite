@@ -11,6 +11,7 @@
 #include "CypherAST.h"
 
 #include <string>
+#include <chrono>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -73,7 +74,7 @@ struct GraphDB
   using PropertyKeyName = openCypher::PropertyKeyName;
   using TraversalDirection = openCypher::TraversalDirection;
   using ExpressionsByVarAndProperties = openCypher::ExpressionsByVarAndProperties;
-
+  
   // Contains information to order results in the same order as they were specified in the return clause.
   using ResultOrder = std::vector<std::pair<
   unsigned /* i = index into VecValues, VecColumnNames*/,
@@ -85,9 +86,10 @@ struct GraphDB
   using FuncResults = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
   
   using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
+  using FuncOnSQLQueryDuration = std::function<void(const std::chrono::steady_clock::duration)>;
   using FuncOnDBDiagnosticContent = std::function<void(int argc, char **argv, char **column)>;
-
-  GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic);
+  
+  GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration& fOnSQLQueryDuration, const FuncOnDBDiagnosticContent& fOnDiagnostic);
   ~GraphDB();
   
   // Creates a sql table.
@@ -95,6 +97,11 @@ struct GraphDB
   void addType(std::string const& typeName,
                bool isNode,
                std::vector<PropertyKeyName> const& properties);
+  
+  // When doing several inserts, it is best to have a transaction for many inserts.
+  // TODO redesign API to remove this.
+  void beginTransaction();
+  void endTransaction();
   
   ID addNode(const std::string& type,
              const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
@@ -106,7 +113,7 @@ struct GraphDB
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.
   std::string const & idProperty() const { return m_idProperty; }
-
+  
   // |labels| is the list of possible labels. When empty, all labels are allowed.
   void forEachElementPropertyWithLabelsIn(const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
@@ -128,6 +135,13 @@ struct GraphDB
                                          const ExpressionsByVarAndProperties& allFilters,
                                          FuncResults& f);
   
+  // Time to run the SQL queries.
+  std::chrono::steady_clock::duration m_totalSQLQueryExecutionDuration{};
+  // Time spent in the results callback of the query on the sytem relationship table.
+  std::chrono::steady_clock::duration m_totalSystemRelationshipCbDuration{};
+  // Time spent in the results callback of the query on the property tables.
+  std::chrono::steady_clock::duration m_totalPropertyTablesCbDuration{};
+
   void print();
 private:
   std::string m_idProperty{"SYS__ID"};
@@ -139,6 +153,7 @@ private:
   std::unordered_map<std::string, std::set<PropertyKeyName>> m_properties;
   
   const FuncOnSQLQuery m_fOnSQLQuery;
+  const FuncOnSQLQueryDuration m_fOnSQLQueryDuration;
   const FuncOnDBDiagnosticContent m_fOnDiagnostic;
 
   std::vector<std::string> computeLabels(const Element, const std::vector<std::string>& inputLabels) const;
@@ -157,5 +172,10 @@ private:
   static ResultOrder computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses);
 
   std::optional<std::set<size_t>> computeTypeFilter(const Element e, std::vector<std::string> const & nodeLabelsStr);
+  
+  int sqlite3_exec(const std::string& queryStr,
+                   int (*callback)(void*,int,char**,char**),
+                   void *,
+                   char **errmsg);
 };
 

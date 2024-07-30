@@ -27,11 +27,14 @@ struct hash<IDAndType>
 };
 }
 
-GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticContent& fOnDiagnostic)
+GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration& fOnSQLQueryDuration, const FuncOnDBDiagnosticContent& fOnDiagnostic)
 : m_fOnSQLQuery(fOnSQLQuery)
+, m_fOnSQLQueryDuration(fOnSQLQueryDuration)
 , m_fOnDiagnostic(fOnDiagnostic)
 {
   LogIndentScope _ = logScope(std::cout, "Creating System tables...");
+  
+  const bool useIndices = true;
 
   if(auto res = sqlite3_open("test.sqlite3db", &m_db))
     throw std::logic_error(sqlite3_errstr(res));
@@ -44,9 +47,8 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
     std::string typeName = "nodes";
     {
       const std::string req = "DROP TABLE " + typeName + ";";
-      m_fOnSQLQuery(req);
       // ignore error
-      auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
+      auto res = sqlite3_exec(req, 0, 0, 0);
     }
     {
       std::ostringstream s;
@@ -57,14 +59,13 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
       }
       s << ");";
       const std::string req = s.str();
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+      if(auto res = sqlite3_exec(req, 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
+    if(useIndices)
     {
       const std::string req = "CREATE INDEX NodeTypeIndex ON " + typeName + "(NodeType);";
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+      if(auto res = sqlite3_exec(req, 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
   }
@@ -73,9 +74,8 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
     std::string typeName = "relationships";
     {
       const std::string req = "DROP TABLE " + typeName + ";";
-      m_fOnSQLQuery(req);
       // ignore error
-      auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
+      auto res = sqlite3_exec(req, 0, 0, 0);
     }
     {
       std::ostringstream s;
@@ -88,26 +88,25 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
       }
       s << ");";
       const std::string req = s.str();
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+      if(auto res = sqlite3_exec(req, 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
+    if(useIndices)
     {
       const std::string req = "CREATE INDEX RelationshipTypeIndex ON " + typeName + "(RelationshipType);";
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+      if(auto res = sqlite3_exec(req, 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
+    if(useIndices)
     {
       const std::string req = "CREATE INDEX originIDIndex ON " + typeName + "(OriginID);";
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+      if(auto res = sqlite3_exec(req, 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
+    if(useIndices)
     {
       const std::string req = "CREATE INDEX destinationIDIndex ON " + typeName + "(DestinationID);";
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+      if(auto res = sqlite3_exec(req, 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
   }
@@ -116,9 +115,8 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
     std::string typeName = "namedTypes";
     {
       const std::string req = "DROP TABLE " + typeName + ";";
-      m_fOnSQLQuery(req);
       // ignore error
-      auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
+      auto res = sqlite3_exec(req, 0, 0, 0);
     }
     std::ostringstream s;
     s << "CREATE TABLE " << typeName << " (";
@@ -128,9 +126,7 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnDBDiagnosticCont
       s << "NamedType TEXT";
     }
     s << ");";
-    const std::string req = s.str();
-    m_fOnSQLQuery(req);
-    if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+    if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
       throw std::logic_error(sqlite3_errstr(res));
   }
 }
@@ -144,9 +140,8 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
 {
   {
     const std::string req = "DROP TABLE " + typeName + ";";
-    m_fOnSQLQuery(req);
     // ignore error
-    auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0);
+    auto res = sqlite3_exec(req, 0, 0, 0);
   }
   {
     std::ostringstream s;
@@ -158,8 +153,7 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
     }
     s << ");";
     const std::string req = s.str();
-    m_fOnSQLQuery(req);
-    if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+    if(auto res = sqlite3_exec(req, 0, 0, 0))
       throw std::logic_error(sqlite3_errstr(res));
   }
   // record type
@@ -170,10 +164,9 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
     << (isNode ? "E" : "R")
     << "') RETURNING TypeIdx";
     const std::string req = s.str();
-    m_fOnSQLQuery(req);
     size_t typeIdx{std::numeric_limits<size_t>::max()};
     char* msg{};
-    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_typeIdx, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(req, [](void *p_typeIdx, int argc, char **argv, char **column) {
       auto & typeIdx = *static_cast<size_t*>(p_typeIdx);
       for (int i=0; i< argc; i++)
         typeIdx = atoi(argv[i]);
@@ -231,6 +224,16 @@ bool GraphDB::findValidProperties(const std::string& typeName,
   return true;
 }
 
+void GraphDB::beginTransaction()
+{
+  if(auto res = sqlite3_exec("BEGIN TRANSACTION", 0, 0, 0))
+    throw std::logic_error(sqlite3_errstr(res));
+}
+void GraphDB::endTransaction()
+{
+  if(auto res = sqlite3_exec("END TRANSACTION", 0, 0, 0))
+    throw std::logic_error(sqlite3_errstr(res));
+}
 
 ID GraphDB::addNode(const std::string& typeName,
                     const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
@@ -244,8 +247,7 @@ ID GraphDB::addNode(const std::string& typeName,
     std::ostringstream s;
     s << "INSERT INTO nodes (NodeType) Values(" << *typeIdx << ") RETURNING " << m_idProperty;
     const std::string req = s.str();
-    m_fOnSQLQuery(req);
-    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_nodeId, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(req, [](void *p_nodeId, int argc, char **argv, char **column) {
       auto & nodeId = *static_cast<std::string*>(p_nodeId);
       for (int i=0; i< argc; i++)
         nodeId = argv[i];
@@ -285,8 +287,7 @@ ID GraphDB::addRelationship(const std::string& typeName,
       }
       s << ")";
       const std::string req = s.str();
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_countMatches, int argc, char **argv, char **column) {
+      if(auto res = sqlite3_exec(req, [](void *p_countMatches, int argc, char **argv, char **column) {
         auto & countMatches = *static_cast<size_t*>(p_countMatches);
         ++countMatches;
         return 0;
@@ -306,8 +307,7 @@ ID GraphDB::addRelationship(const std::string& typeName,
     << ", " << destinationEntity
     <<") RETURNING " << m_idProperty;
     const std::string req = s.str();
-    m_fOnSQLQuery(req);
-    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_relId, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(req, [](void *p_relId, int argc, char **argv, char **column) {
       auto & relId = *static_cast<std::string*>(p_relId);
       for (int i=0; i< argc; i++)
         relId = argv[i];
@@ -339,15 +339,14 @@ void GraphDB::addElement(const std::string& typeName,
     s << ", " << propertyValue;
   s << ");";
   const std::string req = s.str();
-  m_fOnSQLQuery(req);
-  if(auto res = sqlite3_exec(m_db, req.c_str(), 0, 0, 0))
+  if(auto res = sqlite3_exec(req, 0, 0, 0))
     throw std::logic_error(sqlite3_errstr(res));
 }
 
 void GraphDB::print()
 {
   std::vector<std::string> names;
-  if(auto res = sqlite3_exec(m_db, "SELECT name FROM sqlite_master WHERE type='table';",
+  if(auto res = sqlite3_exec("SELECT name FROM sqlite_master WHERE type='table';",
                              [](void *p_names, int argc, char **argv, char **column) {
     auto & names = *static_cast<std::vector<std::string>*>(p_names);
     for (int i=0; i< argc; i++)
@@ -366,16 +365,14 @@ void GraphDB::print()
       std::ostringstream s;
       s << "SELECT * FROM " << name;
       const std::string req = s.str();
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), diagFunc, this, 0))
+      if(auto res = sqlite3_exec(req, diagFunc, this, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
     {
       std::ostringstream s;
       s << "PRAGMA table_info('" << name << "')";
       const std::string req = s.str();
-      m_fOnSQLQuery(req);
-      if(auto res = sqlite3_exec(m_db, req.c_str(), diagFunc, this, 0))
+      if(auto res = sqlite3_exec(req, diagFunc, this, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
   }
@@ -639,6 +636,8 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     propertyMappingCypherToSQL[*relVar][idProperty] = "relationships.SYS__ID";
 
   // todo: optionally use pagination to handle very large graphs.
+  // https://stackoverflow.com/a/65647734/3940228
+  // This will be needed when the cypher query has a LIMIT clause.
 
   // 1. Scan the system table of relationships to gather callerRows
 
@@ -679,6 +678,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
  
   {
     struct RelationshipQueryInfo{
+      std::chrono::steady_clock::duration& totalSystemRelationshipCbDuration;
       CallersRows & callerRows;
       std::optional<unsigned> indexRelationshipID;
       std::optional<unsigned> indexNodeID;
@@ -686,7 +686,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
       std::optional<unsigned> indexRelationshipType;
       std::optional<unsigned> indexNodeType;
       std::optional<unsigned> indexDualNodeType;
-    } queryInfo{callerRows};
+    } queryInfo{m_totalSystemRelationshipCbDuration, callerRows};
 
     std::ostringstream s;
     s << "SELECT ";
@@ -800,9 +800,10 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
 
     const std::string req = s.str();
 
-    m_fOnSQLQuery(req);
     char*msg{};
-    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_queryInfo, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(req, [](void *p_queryInfo, int argc, char **argv, char **column) {
+      const auto t1 = std::chrono::system_clock::now();
+
       auto & queryInfo = *static_cast<RelationshipQueryInfo*>(p_queryInfo);
       auto relKey = IDAndType{
         queryInfo.indexRelationshipID.has_value() ? argv[*queryInfo.indexRelationshipID] : std::string{},
@@ -817,6 +818,9 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
         queryInfo.indexDualNodeType.has_value() ? static_cast<size_t>(std::atoll(argv[*queryInfo.indexDualNodeType])) : 0ull
       };
       queryInfo.callerRows[std::move(nodeKey)][std::move(dualNodeKey)].push_back(std::move(relKey));
+
+      const auto duration = std::chrono::system_clock::now() - t1;
+      queryInfo.totalSystemRelationshipCbDuration += duration;
       return 0;
     }, &queryInfo, &msg))
       throw std::logic_error(msg);
@@ -1003,17 +1007,28 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     const std::string queryStr = s.str();
     if(!queryStr.empty())
     {
-      m_fOnSQLQuery(queryStr);
-      if(auto res = sqlite3_exec(m_db, queryStr.c_str(), [](void *p_properties, int argc, char **argv, char **column) {
-        auto & properties = *static_cast<std::unordered_map<ID, std::vector<std::optional<std::string>>>*>(p_properties);
-        auto & props = properties[argv[0]];
-        for(int i=1; i<argc; ++i)
+      struct QueryData{
+        std::chrono::steady_clock::duration& totalPropertyTablesCbDuration;
+        std::unordered_map<ID, std::vector<std::optional<std::string>>> & properties;
+      } queryData{m_totalPropertyTablesCbDuration, properties};
+
+      if(auto res = sqlite3_exec(queryStr.c_str(), [](void *p_queryData, int argc, char **argv, char **column) {
+        const auto t1 = std::chrono::system_clock::now();
+
+        auto & queryData = *static_cast<QueryData*>(p_queryData);
         {
-          auto * arg = argv[i];
-          props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
+          auto & props = queryData.properties[argv[0]];
+          for(int i=1; i<argc; ++i)
+          {
+            auto * arg = argv[i];
+            props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
+          }
         }
+
+        const auto duration = std::chrono::system_clock::now() - t1;
+        queryData.totalPropertyTablesCbDuration += duration;
         return 0;
-      }, &properties, 0))
+      }, &queryData, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
   };
@@ -1164,9 +1179,8 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Element elem,
   const std::string req = s.str();
   if(!req.empty())
   {
-    m_fOnSQLQuery(req);
     char*msg{};
-    if(auto res = sqlite3_exec(m_db, req.c_str(), [](void *p_results, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(req, [](void *p_results, int argc, char **argv, char **column) {
       auto & results = *static_cast<Results*>(p_results);
       for(int i=0; i<argc; ++i)
       {
@@ -1203,4 +1217,23 @@ auto GraphDB::computeResultOrder(const std::vector<const std::vector<ReturnClaus
   }
   
   return resultOrder;
+}
+
+int GraphDB::sqlite3_exec(const std::string& queryStr,
+                          int (*callback)(void*,int,char**,char**),
+                          void * cbParam,
+                          char **errmsg)
+{
+  m_fOnSQLQuery(queryStr);
+
+  const auto t1 = std::chrono::system_clock::now();
+
+  const auto res = ::sqlite3_exec(m_db, queryStr.c_str(), callback, cbParam, errmsg);
+
+  const auto duration = std::chrono::system_clock::now() - t1;
+  m_totalSQLQueryExecutionDuration += duration;
+
+  m_fOnSQLQueryDuration(duration);
+
+  return res;
 }
