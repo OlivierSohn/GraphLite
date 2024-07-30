@@ -64,6 +64,9 @@ int main()
         }
     }
   };
+  auto onSQLQueryDuration = [&](const std::chrono::steady_clock::duration& )
+  {
+  };
   auto onDBDiagnosticContent = [](int argc, char **argv, char **column)
   {
     if(printSQLRequests)
@@ -78,7 +81,7 @@ int main()
   };
 
   
-  GraphDB db(onSQLQuery, onDBDiagnosticContent);
+  GraphDB db(onSQLQuery, onSQLQueryDuration, onDBDiagnosticContent);
 
   using openCypher::mkProperty;
   const auto p_test = mkProperty("test");
@@ -114,6 +117,9 @@ int main()
 
   try
   {
+    // TODO
+    //runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e3) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2), id(e3);");
+
     // Where clause with id or property lookup
     runCypher("MATCH (`n`)       WHERE n.test = 3   RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(n) = 1 RETURN id(m), id(n), id(`r`), `m`.test;");
@@ -149,11 +155,9 @@ int main()
     runCypher("MATCH (`n`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) OR n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`;");
 
     runCypher("MATCH (`n`)-[r]-(`m`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) AND n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`, id(m), id(r);");
-    
+
     // todo write some performance tests
     // https://stackoverflow.com/questions/1711631/improve-insert-per-second-performance-of-sqlite
-    // - verify filtering on ids works as intended:
-    //     using a very large graph, find nodes one hop away from a given node and compare with/without prefiltering on ids.
 
     // TODO support UNION
 

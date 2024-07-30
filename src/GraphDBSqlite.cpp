@@ -3,6 +3,7 @@
 #include "SqlAST.h"
 
 #include <iostream>
+#include <filesystem>
 #include <sstream>
 #include <numeric>
 
@@ -35,8 +36,15 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration
   LogIndentScope _ = logScope(std::cout, "Creating System tables...");
   
   const bool useIndices = true;
+  
+  const bool overwrite = true;
+  const auto dbFile = std::filesystem::path("test.sqlite3db");
+  if(overwrite)
+  {
+    std::filesystem::remove(dbFile);
+  }
 
-  if(auto res = sqlite3_open("test.sqlite3db", &m_db))
+  if(auto res = sqlite3_open(dbFile.string().c_str(), &m_db))
     throw std::logic_error(sqlite3_errstr(res));
   
   // TODO do not overwrite tables, read types from namedTypes.
@@ -861,6 +869,14 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   for(const auto & rct : propertiesRel)
     strPropertiesRel.push_back(rct.propertyName);
 
+  // TODO: The UNION ALL on different types only works because all properties have the same type (int),
+  // but in the future this will likely break.
+  // For example with entity types
+  // - Person, properties: age(int), ssn
+  // - BottleOfWine, properties: age(string)
+  // In this query, age is either an int property or a string property:
+  // MATCH (a)-[r]->(b) WHERE id(b) IN (...) RETURN a.age
+  // We should probably use different queries instead of a UNION ALL approach then.
   auto gatherPropertyValues = [this, &postFilters, &idProperty](const Variable* var,
                                      const auto& elemsByType,
                                      const Element elem,
@@ -990,6 +1006,8 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   std::unordered_map<ID, std::vector<std::optional<std::string>>> dualNodeProperties;
   std::unordered_map<ID, std::vector<std::optional<std::string>>> relProperties;
 
+  // TODO: when we query the same property tables for node and dual node, instead of doing 2 queries we should do a single UNION ALL query
+  // with an extra column saying whether the row is for node or dualNode.
   if(nodeNeedsTypeInfo && lookupNodesProperties)
     gatherPropertyValues(nodeVar, nodesByTypes, Element::Node, strPropertiesNode, nodeProperties);
   if(dualNodeNeedsTypeInfo && lookupDualNodesProperties)

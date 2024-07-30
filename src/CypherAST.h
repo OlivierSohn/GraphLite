@@ -76,18 +76,7 @@ enum class TraversalDirection
   Forward,
   Backward
 };
-inline TraversalDirection mirror(TraversalDirection d)
-{
-  switch(d)
-  {
-    case TraversalDirection::Forward:
-      return TraversalDirection::Backward;
-    case TraversalDirection::Backward:
-      return TraversalDirection::Forward;
-    default:
-      return d;
-  }
-}
+
 struct RelationshipPattern
 {
   TraversalDirection traversalDirection;
@@ -391,9 +380,9 @@ struct NonArithmeticOperatorExpression : public Expression
   
   void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
   {
-    // Probably a logic error, the owner of the NonArithmeticOperatorExpression should implement
-    // asMaximalANDAggregation differently.
-    throw std::logic_error("asMaximalANDAggregation not implemented for NonArithmeticOperatorExpression");
+    if(mayPropertyName.has_value())
+      throw std::logic_error("asMaximalANDAggregation not implemented for NonArithmeticOperatorExpression that has a property name");
+    std::get<AggregateExpression>(atom.var).asMaximalANDAggregation(exprs);
   }
 
   VarsAndProperties varsAndProperties() const override

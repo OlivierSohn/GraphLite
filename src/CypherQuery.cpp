@@ -102,8 +102,6 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   const std::map<Variable, std::vector<ReturnClauseTerm>> props =
   extractProperties(spq.returnClause.naoExps);
   
-  // TODO make the code of forEachNodeAndRelatedRelationship more generic/symmetrical
-  //   s.t we don't need to detect which pattern is active here.
   auto nodePatternIsActive = [&](const NodePattern& np)
   {
     if(np.mayVariable.has_value())
@@ -121,10 +119,12 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
     return !np.labels.labels.empty();
   };
   
-  const bool leftNodeVarIsActive = nodePatternIsActive(app.firstNodePattern);
-  const bool rightNodeVarIsActive = (app.patternElementChains.size() == 1) && nodePatternIsActive(app.patternElementChains[0].nodePattern);
+  size_t countActiveNodePaterns{};
+  countActiveNodePaterns += nodePatternIsActive(app.firstNodePattern);
+  for(const auto & pec : app.patternElementChains)
+    countActiveNodePaterns += nodePatternIsActive(pec.nodePattern);
   
-  if((app.patternElementChains.size() == 1) && (leftNodeVarIsActive || rightNodeVarIsActive))
+  if((app.patternElementChains.size() == 1) && (countActiveNodePaterns > 0))
   {
     // In this branch we support triplets (Node)-[Rel]-(DualNode) where:
     // - Node, DualNode may be:
@@ -141,12 +141,9 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
     
     // The first SQL query will be on the system relationships table, joined with the system nodes table
     // because we need to know some nodes types (or nodes properties).
-    
-    const auto& leftNodePattern = app.firstNodePattern;
-    const auto& rightNodePattern = app.patternElementChains[0].nodePattern;
-    
-    const auto& nodePattern = leftNodeVarIsActive ? leftNodePattern : rightNodePattern;
-    const auto& dualNodePattern = leftNodeVarIsActive ? rightNodePattern : leftNodePattern;
+
+    const auto& nodePattern = app.firstNodePattern;
+    const auto& dualNodePattern = app.patternElementChains[0].nodePattern;
     
     const auto& nodeVariable = nodePattern.mayVariable;
     const auto& relVariable = app.patternElementChains[0].relPattern.mayVariable;
@@ -195,8 +192,7 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
     variablesNames.push_back(relVariable.has_value() ? relVariable->symbolicName.str : "");
     variablesNames.push_back(dualNodeVariable.has_value() ? dualNodeVariable->symbolicName.str : "");
     
-    const TraversalDirection traversalDirection = app.patternElementChains[0].relPattern.traversalDirection;
-    db.forEachNodeAndRelatedRelationship(leftNodeVarIsActive ? traversalDirection : mirror(traversalDirection),
+    db.forEachNodeAndRelatedRelationship(app.patternElementChains[0].relPattern.traversalDirection,
                                          nodeVariable.has_value() ? &*nodeVariable : nullptr,
                                          relVariable.has_value() ? &*relVariable : nullptr,
                                          dualNodeVariable.has_value() ? &*dualNodeVariable : nullptr,
