@@ -7,7 +7,7 @@
 
 namespace openCypher::detail
 {
-SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& query, const bool printAST)
+SingleQuery cypherQueryToAST(const PropertyKeyName& idProperty, const std::string& query, const bool printAST)
 {
   auto chars = antlr4::ANTLRInputStream(query);
   auto lexer = CypherLexer(&chars);
@@ -67,14 +67,14 @@ std::vector<std::string> asStringVec(Labels const & labels)
 void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow)
 {
   bool sentColumns{};
-  std::vector<std::string> variablesNames;
   auto f = std::function{[&](const GraphDB::ResultOrder& resultOrder,
+                             const std::vector<Variable>& variables,
                              const GraphDB::VecColumnNames& columnNames,
                              const GraphDB::VecValues& values){
     if(!sentColumns)
     {
       // resultOrder and columnNames will always be the same so we send them once only.
-      fOnOrderAndColumnNames(resultOrder, variablesNames, columnNames);
+      fOnOrderAndColumnNames(resultOrder, variables, columnNames);
       sentColumns = true;
     }
     fOnRow(values);
@@ -101,6 +101,24 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   
   const std::map<Variable, std::vector<ReturnClauseTerm>> props =
   extractProperties(spq.returnClause.naoExps);
+
+  auto mkReturnedProperties = [&](const Variable& var) -> std::vector<ReturnClauseTerm>
+  {
+    if(auto it = props.find(var); it != props.end())
+      return it->second;
+    return {};
+  };
+  auto mkVariableAndReturnedProperties = [&](std::optional<Variable> const & mayVar)
+  {
+    std::unique_ptr<VariableAndReturnedProperties> res;
+    if(mayVar.has_value())
+    {
+      res = std::make_unique<VariableAndReturnedProperties>();
+      res->var = *mayVar;
+      res->returnedProperties = mkReturnedProperties(*mayVar);
+    }
+    return res;
+  };
   
   auto nodePatternIsActive = [&](const NodePattern& np)
   {
@@ -126,47 +144,14 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   
   if((app.patternElementChains.size() == 1) && (countActiveNodePaterns > 0))
   {
-    // In this branch we support triplets (Node)-[Rel]-(DualNode) where:
-    // - Node, DualNode may be:
-    //   - a variable name, or
-    //   - labels, or
-    //   - both, or
-    //   - nothing (but we cannot have both Node and DualNode be nothing)
-    // - Rel may be
-    //   - a variable name, or
-    //   - labels, or
-    //   - both, or
-    //   - nothing
-    // - Relationship direction can be anything.
-    
-    // The first SQL query will be on the system relationships table, joined with the system nodes table
-    // because we need to know some nodes types (or nodes properties).
-
-    const auto& nodePattern = app.firstNodePattern;
-    const auto& dualNodePattern = app.patternElementChains[0].nodePattern;
-    
-    const auto& nodeVariable = nodePattern.mayVariable;
+    const auto& nodeVariable = app.firstNodePattern.mayVariable;
     const auto& relVariable = app.patternElementChains[0].relPattern.mayVariable;
-    const auto& dualNodeVariable = dualNodePattern.mayVariable;
+    const auto& dualNodeVariable = app.patternElementChains[0].nodePattern.mayVariable;
     
-    const auto& nodeLabels = nodePattern.labels;
+    const auto& nodeLabels = app.firstNodePattern.labels;
     const auto& relLabels = app.patternElementChains[0].relPattern.labels;
-    const auto& dualNodeLabels = dualNodePattern.labels;
-    
-    std::vector<ReturnClauseTerm> propertiesNode;
-    std::vector<ReturnClauseTerm> propertiesRel;
-    std::vector<ReturnClauseTerm> propertiesDualNode;
-    
-    if(nodeVariable.has_value())
-      if(auto it = props.find(*nodeVariable); it != props.end())
-        propertiesNode = it->second;
-    if(relVariable.has_value())
-      if(auto it = props.find(*relVariable); it != props.end())
-        propertiesRel = it->second;
-    if(dualNodeVariable.has_value())
-      if(auto it = props.find(*dualNodeVariable); it != props.end())
-        propertiesDualNode = it->second;
-    
+    const auto& dualNodeLabels = app.patternElementChains[0].nodePattern.labels;
+
     {
       // Sanity check.
       
@@ -187,23 +172,67 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
           if(0 == allVariables.count(var))
             throw std::logic_error("A variable used in the where clause was not defined.");
     }
-    
-    variablesNames.push_back(nodeVariable.has_value() ? nodeVariable->symbolicName.str : "");
-    variablesNames.push_back(relVariable.has_value() ? relVariable->symbolicName.str : "");
-    variablesNames.push_back(dualNodeVariable.has_value() ? dualNodeVariable->symbolicName.str : "");
+
+    std::unique_ptr<VariableAndReturnedProperties> nodeVarAndReturnedProps = mkVariableAndReturnedProperties(nodeVariable);
+    std::unique_ptr<VariableAndReturnedProperties> relVarAndReturnedProps = mkVariableAndReturnedProperties(relVariable);
+    std::unique_ptr<VariableAndReturnedProperties> dualNodeVarAndReturnedProps = mkVariableAndReturnedProperties(dualNodeVariable);
     
     db.forEachNodeAndRelatedRelationship(app.patternElementChains[0].relPattern.traversalDirection,
-                                         nodeVariable.has_value() ? &*nodeVariable : nullptr,
-                                         relVariable.has_value() ? &*relVariable : nullptr,
-                                         dualNodeVariable.has_value() ? &*dualNodeVariable : nullptr,
-                                         propertiesNode,
-                                         propertiesRel,
-                                         propertiesDualNode,
+                                         nodeVarAndReturnedProps.get(),
+                                         relVarAndReturnedProps.get(),
+                                         dualNodeVarAndReturnedProps.get(),
                                          asStringVec(nodeLabels),
                                          asStringVec(relLabels),
                                          asStringVec(dualNodeLabels),
                                          whereExprsByVarsAndproperties,
                                          f);
+    return;
+  }
+  else if(app.patternElementChains.size() > 1)
+  {
+    std::map<Variable, std::vector<ReturnClauseTerm>> variables;
+    std::vector<PathPatternElement> pathPatternElements;
+
+    if(app.firstNodePattern.mayVariable.has_value())
+      variables[*app.firstNodePattern.mayVariable] = mkReturnedProperties(*app.firstNodePattern.mayVariable);
+    pathPatternElements.emplace_back(app.firstNodePattern.mayVariable,
+                                     asStringVec(app.firstNodePattern.labels));
+
+    std::vector<TraversalDirection> traversalDirections;
+
+    for(const auto & pec : app.patternElementChains)
+    {
+      traversalDirections.push_back(pec.relPattern.traversalDirection);
+
+      if(pec.relPattern.mayVariable.has_value())
+        variables[*pec.relPattern.mayVariable] = mkReturnedProperties(*pec.relPattern.mayVariable);
+      pathPatternElements.emplace_back(pec.relPattern.mayVariable,
+                                       asStringVec(pec.relPattern.labels));
+
+      if(pec.nodePattern.mayVariable.has_value())
+        variables[*pec.nodePattern.mayVariable] = mkReturnedProperties(*pec.nodePattern.mayVariable);
+      pathPatternElements.emplace_back(pec.nodePattern.mayVariable,
+                                       asStringVec(pec.nodePattern.labels));
+    }
+    
+    {
+      // Sanity check.
+      
+      for(const auto & [varName, _] : props)
+        if(0 == variables.count(varName))
+          throw std::logic_error("A variable used in the return clause was not defined.");
+      
+      for(const auto& [varAndProperties, _]: whereExprsByVarsAndproperties)
+        for(const auto& [var, _]: varAndProperties)
+          if(0 == variables.count(var))
+            throw std::logic_error("A variable used in the where clause was not defined.");
+    }
+
+    db.forEachPath(traversalDirections,
+                   variables,
+                   pathPatternElements,
+                   whereExprsByVarsAndproperties,
+                   f);
     return;
   }
   
@@ -229,9 +258,7 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   
   const auto& variable = singleNodeVariable ? *nodePattern.mayVariable : *app.patternElementChains[0].relPattern.mayVariable;
   const auto& labels = singleNodeVariable ? nodePattern.labels : app.patternElementChains[0].relPattern.labels;
-  
-  variablesNames.push_back(variable.symbolicName.str);
-  
+
   if(spq.returnClause.naoExps.empty())
     throw std::logic_error("Not Implemented (Expected some non arithmetic expression)");
   
@@ -254,7 +281,8 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   
   const std::vector<std::string> labelsStr = asStringVec(labels);
   
-  db.forEachElementPropertyWithLabelsIn(elem,
+  db.forEachElementPropertyWithLabelsIn(variable,
+                                        elem,
                                         properties,
                                         labelsStr,
                                         &filter,

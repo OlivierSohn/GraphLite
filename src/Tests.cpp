@@ -31,7 +31,7 @@ GraphWithStats::GraphWithStats()
     ++m_countSQLQueries;
     if(m_printSQLRequests)
     {
-      auto req = reqLarge.substr(0, 300);
+      auto req = reqLarge.substr(0, 700);
       bool first = true;
       for(const auto & part1 : splitOn("UNION ALL ", req))
         for(const auto & part : splitOn("INNER JOIN ", part1))
@@ -116,9 +116,9 @@ struct QueryResultsHandler
       m_logIndentScope = std::make_unique<LogIndentScope>();
     }
   }
-  void onOrderAndColumnNames(const GraphDB::ResultOrder& ro, const std::vector<std::string>& varNames, const GraphDB::VecColumnNames& colNames) {
+  void onOrderAndColumnNames(const GraphDB::ResultOrder& ro, const std::vector<openCypher::Variable>& vars, const GraphDB::VecColumnNames& colNames) {
     m_resultOrder = ro;
-    m_variablesNames = varNames;
+    m_variables = vars;
     m_columnNames = colNames;
   }
   
@@ -129,7 +129,7 @@ struct QueryResultsHandler
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
       for(const auto & [i, j] : m_resultOrder)
-        std::cout << m_variablesNames[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
+        std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
       std::cout << std::endl;
     }
     auto & row = m_rows.emplace_back();
@@ -158,7 +158,7 @@ struct QueryResultsHandler
 private:
   std::unique_ptr<LogIndentScope> m_logIndentScope;
   GraphDB::ResultOrder m_resultOrder;
-  std::vector<std::string> m_variablesNames;
+  std::vector<openCypher::Variable> m_variables;
   GraphDB::VecColumnNames m_columnNames;
   
   GraphWithStats& m_db;
@@ -930,6 +930,182 @@ TEST(Test, Labels)
   // 4 because we need different queries on node and dualNode.
 }
 
+TEST(Test, PathForbidsRelationshipsRepetition)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  /*
+   
+   p1 -> p2
+   ^      |
+   -------
+   */
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  
+  std::string p1 = db.addNode("Person", {{p_age, "1"}});
+  std::string p2 = db.addNode("Person", {{p_age, "2"}});
+  std::string r12 = db.addRelationship("Knows", p1, p2, {{p_since, "12"}});
+  std::string r21 = db.addRelationship("Knows", p2, p1, {{p_since, "21"}});
+  
+  QueryResultsHandler handler(*dbWrapper);
+  dbWrapper->m_printSQLRequests = true;
+  handler.run("MATCH (a)-->(b)-->(c)-->(d) return a.age, b.age, c.age, d.age");
+  
+  EXPECT_EQ(0, handler.countRows());
+}
+
+TEST(Test, PathAllowsNodesRepetition)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  /*
+   
+   p1 -> p2
+   ^      |
+   -------
+   */
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  
+  std::string p1 = db.addNode("Person", {{p_age, "1"}});
+  std::string p2 = db.addNode("Person", {{p_age, "2"}});
+  std::string r12 = db.addRelationship("Knows", p1, p2, {{p_since, "12"}});
+  std::string r21 = db.addRelationship("Knows", p2, p1, {{p_since, "21"}});
+  
+  QueryResultsHandler handler(*dbWrapper);
+  dbWrapper->m_printSQLRequests = true;
+  handler.run("MATCH (a)-->(b)-->(c) return a.age, b.age, c.age");
+  
+  EXPECT_EQ(2, handler.countRows());
+}
+
+
+TEST(Test, LongerPathPattern)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  
+  auto & db = dbWrapper->getDB();
+  /*
+   -----
+   v     |
+   p1 -> p2 -> p3 -> p4
+   ^                 |
+   -----------------
+   */
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  
+  std::string p1 = db.addNode("Person", {{p_age, "1"}});
+  std::string p2 = db.addNode("Person", {{p_age, "2"}});
+  std::string p3 = db.addNode("Person", {{p_age, "3"}});
+  std::string p4 = db.addNode("Person", {{p_age, "4"}});
+  std::string r12 = db.addRelationship("Knows", p1, p2, {{p_since, "12"}});
+  std::string r23 = db.addRelationship("Knows", p2, p3, {{p_since, "23"}});
+  std::string r32 = db.addRelationship("Knows", p3, p2, {{p_since, "32"}});
+  std::string r34 = db.addRelationship("Knows", p3, p4, {{p_since, "34"}});
+  std::string r41 = db.addRelationship("Knows", p4, p1, {{p_since, "41"}});
+  
+  QueryResultsHandler handler(*dbWrapper);
+  dbWrapper->m_printSQLRequests = true;
+  
+  handler.run("MATCH (a)-[]->(b)-[]->(c) return a.age, b.age, c.age");
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"1"}, {"2"}, {"3"}
+      }, {
+        {"3"}, {"2"}, {"3"}
+      }, {
+        {"2"}, {"3"}, {"4"}
+      }, {
+        {"2"}, {"3"}, {"2"}
+      }, {
+        {"3"}, {"4"}, {"1"}
+      }, {
+        {"4"}, {"1"}, {"2"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+
+  // Non-equi-var expression in WHERE clause is not supported yet.
+  EXPECT_THROW(handler.run("MATCH (a)-[]->(b)-[]->(c) WHERE a.age < b.age AND b.age < c.age return a.age, b.age, c.age"), std::exception);
+  /*
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"1"}, {"2"}, {"3"}
+      }, {
+        {"2"}, {"3"}, {"4"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }*/
+
+  handler.run("MATCH (a)-[]->(b)-[]->(a) return a.age, b.age, a.age");
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"3"}, {"2"}, {"3"}
+      }, {
+        {"2"}, {"3"}, {"2"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+  
+  handler.run("MATCH (a)-[]->(b)-[]->(c) WHERE id(a) <> id(c) return a.age, b.age, c.age");
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"1"}, {"2"}, {"3"}
+      }, {
+        {"2"}, {"3"}, {"4"}
+      }, {
+        {"3"}, {"4"}, {"1"}
+      }, {
+        {"4"}, {"1"}, {"2"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+  
+  handler.run("MATCH (a)-[]->(b)<-[]-(c) return a.age, b.age, c.age");
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"1"}, {"2"}, {"3"}
+      }, {
+        {"3"}, {"2"}, {"1"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+
+  // longer path patterns do not support "any" traversal direction for relationships yet.
+  EXPECT_THROW(handler.run("MATCH (a)-[]-(b)<-[]-(c) return a.age, b.age, c.age"), std::exception);
+}
+
 
 TEST(Test, Perfs)
 {
@@ -982,9 +1158,6 @@ TEST(Test, Perfs)
   std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlQueriesExecutionDuration).count() << " us" << std::endl;
   std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlRelCbDuration).count() << " us" << std::endl;
   std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlPropCbDuration).count() << " us" << std::endl;
-
-  // time for SQL queries execution only:
-  
 }
 
 }

@@ -11,9 +11,9 @@ namespace openCypher
 class MyCypherVisitor : public CypherVisitor
 {
 public:
-  MyCypherVisitor(std::string IDProperty, bool print = false)
+  MyCypherVisitor(PropertyKeyName const& IDProperty, bool print = false)
   : m_print(print)
-  , m_IDProperty(PropertyKeyName{SymbolicName{IDProperty}})
+  , m_IDProperty(IDProperty)
   {}
   
   const std::vector<std::string>& getErrors() const { return m_errors; }

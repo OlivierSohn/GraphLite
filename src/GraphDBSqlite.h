@@ -14,6 +14,7 @@
 #include <chrono>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
 
 
 template<typename Index>
@@ -41,13 +42,16 @@ struct IndexedTypes
       throw std::logic_error("duplicate type");
     typeToIndex[name] = idx;
     indexToType[idx] = name;
+    m_maxIndex = std::max(idx, m_maxIndex.value_or(std::numeric_limits<Index>::lowest()));
   }
 
   const std::unordered_map<std::string, Index>& getTypeToIndex() const { return typeToIndex; }
 
+  const std::optional<Index> getMaxIndex() const { return m_maxIndex; }
 private:
   std::unordered_map<std::string, Index> typeToIndex;
   std::unordered_map<Index, std::string> indexToType;
+  std::optional<Index> m_maxIndex;
 };
 
 using ID = std::string;
@@ -63,6 +67,26 @@ struct ReturnClauseTerm
   size_t returnClausePosition;
 
   openCypher::PropertyKeyName propertyName; // TODO support more later...
+};
+
+struct VariableAndReturnedProperties
+{
+  openCypher::Variable var;
+  
+  // These properties are assoviated to the Variable |var|.
+  std::vector<ReturnClauseTerm> returnedProperties;
+};
+
+struct PathPatternElement
+{
+  PathPatternElement(const std::optional<openCypher::Variable>& var,
+                     const std::vector<std::string>& labels)
+  : var(var)
+  , labels(labels)
+  {}
+
+  std::optional<openCypher::Variable> var;
+  std::vector<std::string> labels;
 };
 
 
@@ -83,7 +107,7 @@ struct GraphDB
   using VecColumnNames = std::vector<const std::vector<PropertyKeyName>*>;
   using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
   
-  using FuncResults = std::function<void(const ResultOrder&, const VecColumnNames&, const VecValues&)>;
+  using FuncResults = std::function<void(const ResultOrder&, const std::vector<Variable>&, const VecColumnNames&, const VecValues&)>;
   
   using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
   using FuncOnSQLQueryDuration = std::function<void(const std::chrono::steady_clock::duration)>;
@@ -112,39 +136,46 @@ struct GraphDB
   
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.
-  std::string const & idProperty() const { return m_idProperty; }
+  PropertyKeyName const & idProperty() const { return m_idProperty; }
   
   // |labels| is the list of possible labels. When empty, all labels are allowed.
-  void forEachElementPropertyWithLabelsIn(const Element,
+  void forEachElementPropertyWithLabelsIn(const Variable& var,
+                                          const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
                                           const std::vector<std::string>& labels,
                                           const std::vector<const Expression*>* filter,
                                           FuncResults& f);
   
-  // |nonEquiVarIDPropertyFilter| corresponds to constraints on id properties of _different_ variables.
   void forEachNodeAndRelatedRelationship(const TraversalDirection,
-                                         const Variable* nodeVar,
-                                         const Variable* relVar,
-                                         const Variable* dualNodeVar,
-                                         const std::vector<ReturnClauseTerm>& propertiesNode,
-                                         const std::vector<ReturnClauseTerm>& propertiesRel,
-                                         const std::vector<ReturnClauseTerm>& propertiesDualNode,
+                                         const VariableAndReturnedProperties* nodeVar,
+                                         const VariableAndReturnedProperties* relVar,
+                                         const VariableAndReturnedProperties* dualNodeVar,
                                          const std::vector<std::string>& nodeLabelsStr,
                                          const std::vector<std::string>& relLabelsStr,
                                          const std::vector<std::string>& dualNodeLabelsStr,
                                          const ExpressionsByVarAndProperties& allFilters,
                                          FuncResults& f);
   
+  struct VariableInfo {
+    bool needsTypeInfo{};
+    bool lookupProperties{};
+  };
+  void forEachPath(const std::vector<TraversalDirection>& traversalDirections,
+                   const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
+                   const std::vector<PathPatternElement>& pathPattern,
+                   const ExpressionsByVarAndProperties& allFilters,
+                   FuncResults& f);
+
   // Time to run the SQL queries.
-  std::chrono::steady_clock::duration m_totalSQLQueryExecutionDuration{};
-  // Time spent in the results callback of the query on the sytem relationship table.
-  std::chrono::steady_clock::duration m_totalSystemRelationshipCbDuration{};
-  // Time spent in the results callback of the query on the property tables.
-  std::chrono::steady_clock::duration m_totalPropertyTablesCbDuration{};
+  mutable std::chrono::steady_clock::duration m_totalSQLQueryExecutionDuration{};
+  // Time spent in the callback of the query on the sytem relationship table.
+  mutable std::chrono::steady_clock::duration m_totalSystemRelationshipCbDuration{};
+  // Time spent in the callback of the query on the labeled entities/relationships property tables.
+  mutable std::chrono::steady_clock::duration m_totalPropertyTablesCbDuration{};
 
   void print();
 private:
-  std::string m_idProperty{"SYS__ID"};
+  PropertyKeyName m_idProperty{openCypher::mkProperty("SYS__ID")};
 
   sqlite3* m_db{};
   IndexedTypes<size_t> m_indexedNodeTypes;
@@ -171,11 +202,39 @@ private:
 
   static ResultOrder computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses);
 
+  struct VariablePostFilters{
+    // These are the properties used in filters.
+    std::set<PropertyKeyName> properties;
+    
+    std::vector<const Expression*> filters;
+  };
+
+  void analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
+                      std::vector<const Expression*>& idFilters,
+                      std::map<Variable, VariablePostFilters>& postFilters) const;
+
+  // Whether the type (aka label) information of a node or relationship needs to be returned from the relationships system table query.
+  bool varRequiresTypeInfo(const Variable& var,
+                           const std::vector<ReturnClauseTerm>& returnedProperties,
+                           const std::map<Variable, VariablePostFilters>& postFilters) const;
+
   std::optional<std::set<size_t>> computeTypeFilter(const Element e, std::vector<std::string> const & nodeLabelsStr);
   
+  static std::string mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn);
+
+  template<typename ElementIDsContainer>
+  void gatherPropertyValues(const Variable& var,
+                            const std::vector<ElementIDsContainer>& elemsByType,
+                            const Element elem,
+                            const std::vector<PropertyKeyName>& strProperties,
+                            const std::map<Variable, VariablePostFilters>& postFilters,
+                            std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties) const;
+
   int sqlite3_exec(const std::string& queryStr,
                    int (*callback)(void*,int,char**,char**),
                    void *,
-                   char **errmsg);
+                   char **errmsg) const;
+  
+  size_t getEndElementType() const;
 };
 

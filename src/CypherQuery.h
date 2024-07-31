@@ -9,10 +9,10 @@ namespace openCypher
 {
 namespace detail
 {
-SingleQuery cypherQueryToAST(const std::string& idProperty, const std::string& query, bool printCypherAST);
+SingleQuery cypherQueryToAST(const PropertyKeyName& idProperty, const std::string& query, bool printCypherAST);
 
 using FOnOrderAndColumnNames = std::function<void(const GraphDB::ResultOrder&,
-                                                  const std::vector<std::string>& /* variable names */,
+                                                  const std::vector<Variable>&,
                                                   const GraphDB::VecColumnNames&)>;
 
 using FOnRow = std::function<void(const GraphDB::VecValues&)>;
@@ -40,7 +40,7 @@ void runCypher(const std::string& cypherQuery, GraphDB&db, ResultsHander& result
   } scope{resultsHandler};
 
   runSingleQuery(ast, db,
-                 [&](const GraphDB::ResultOrder& ro, const std::vector<std::string>& varNames, const GraphDB::VecColumnNames& colNames)
+                 [&](const GraphDB::ResultOrder& ro, const std::vector<Variable>& varNames, const GraphDB::VecColumnNames& colNames)
                  { resultsHandler.onOrderAndColumnNames(ro, varNames, colNames); },
                  [&](const GraphDB::VecValues& values)
                  { resultsHandler.onRow(values); });

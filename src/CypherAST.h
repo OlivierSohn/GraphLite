@@ -50,6 +50,11 @@ struct Variable
     return a.symbolicName == b.symbolicName;
   }
 };
+inline std::ostream& operator<<(std::ostream& os, const Variable& p)
+{
+  os << p.symbolicName;
+  return os;
+}
 
 struct SchemaName
 {

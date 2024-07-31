@@ -17,9 +17,9 @@ int main()
       std::cout << "[openCypher] " << cypherQuery << std::endl;
       m_logIndentScope = std::make_unique<LogIndentScope>();
     }
-    void onOrderAndColumnNames(const GraphDB::ResultOrder& ro, const std::vector<std::string>& varNames, const GraphDB::VecColumnNames& colNames) {
+    void onOrderAndColumnNames(const GraphDB::ResultOrder& ro, const std::vector<openCypher::Variable>& vars, const GraphDB::VecColumnNames& colNames) {
       m_resultOrder = ro;
-      m_variablesNames = varNames;
+      m_variables = vars;
       m_columnNames = colNames;
     }
     
@@ -28,7 +28,7 @@ int main()
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
       for(const auto & [i, j] : m_resultOrder)
-        std::cout << m_variablesNames[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
+        std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
       std::cout << std::endl;
     }
     void onCypherQueryEnds()
@@ -39,7 +39,7 @@ int main()
   private:
     std::unique_ptr<LogIndentScope> m_logIndentScope;
     GraphDB::ResultOrder m_resultOrder;
-    std::vector<std::string> m_variablesNames;
+    std::vector<openCypher::Variable> m_variables;
     GraphDB::VecColumnNames m_columnNames;
   };
   
@@ -117,9 +117,6 @@ int main()
 
   try
   {
-    // TODO
-    //runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e3) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2), id(e3);");
-
     // Where clause with id or property lookup
     runCypher("MATCH (`n`)       WHERE n.test = 3   RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(n) = 1 RETURN id(m), id(n), id(`r`), `m`.test;");
@@ -156,6 +153,10 @@ int main()
 
     runCypher("MATCH (`n`)-[r]-(`m`)       WHERE (n.test >= 2.5 AND n.test <= 3.5) OR (n.what >= 50 AND n.what <= 60) AND n.who = 2  RETURN id(`n`), `n`.test, `n`.`what`, id(m), id(r);");
 
+    runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e3) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2), id(e3);");
+    runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
+    runCypher("MATCH (e1)-[]->()-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
+
     // todo write some performance tests
     // https://stackoverflow.com/questions/1711631/improve-insert-per-second-performance-of-sqlite
 
@@ -168,7 +169,6 @@ int main()
     //     use these ids to filter the relationships table.
     //   -> create a test example that shows the perf issue before trying to fix it.
 
-    // todo longer path patterns: (a)-[r1]->(b)-[r2]->(c)
     // todo longer path patterns: (a)-[r1:*..3]->(b)
     
     // todo deduce labels from where clause (used in FFP):
