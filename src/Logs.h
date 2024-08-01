@@ -31,3 +31,7 @@ LogIndentScope logScope(std::ostream& os, const std::string& scopeName);
 //
 // splitOn('test', '12test45test67') returns '12', 'test', '45', 'test', '67'.
 std::vector<std::string> splitOn(const std::string& match, std::string const & req);
+
+void printChart(std::ostream&,
+                std::vector<std::string> const & columnNames,
+                std::vector<std::vector<std::string>> const & values);

@@ -112,7 +112,7 @@ int main()
   auto runCypher = [&](const std::string &cypherQuery)
   {
     PrettyPrintQueryResults ppHandler;
-    openCypher::runCypher(cypherQuery, db, ppHandler);
+    openCypher::runCypher(cypherQuery, {}, db, ppHandler);
   };
 
   try
@@ -156,6 +156,8 @@ int main()
     runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e3) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2), id(e3);");
     runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
     runCypher("MATCH (e1)-[]->()-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
+
+    // TODO use bound variables for ids in SQL queries.
 
     // TODO support prepared statements to have faster graph creation
     // (we will have one prepared statement for creating the relationships, one for creating nodes).
