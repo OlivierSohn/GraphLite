@@ -7,16 +7,25 @@
 
 namespace openCypher::detail
 {
-SingleQuery cypherQueryToAST(const PropertyKeyName& idProperty, const std::string& query, const bool printAST)
+SingleQuery cypherQueryToAST(const PropertyKeyName& idProperty,
+                             const std::string& query,
+                             const std::map<SymbolicName, std::vector<std::string>>& queryParams,
+                             const bool printAST)
 {
   auto chars = antlr4::ANTLRInputStream(query);
   auto lexer = CypherLexer(&chars);
   auto tokens = antlr4::CommonTokenStream(&lexer);
   auto parser = CypherParser(&tokens);
-  //parser.setBuildParseTree(true);
+
+  //parser.setBuildParseTree(false);
+  parser.setTrimParseTree(true);
+  
+  // Could be slightly faster with:
+  // parser.setErrorHandler(std::make_shared<antlr4::BailErrorStrategy>());
+  
   CypherParser::OC_CypherContext* cypherTree = parser.oC_Cypher();
   
-  auto visitor = MyCypherVisitor(idProperty, printAST);
+  auto visitor = MyCypherVisitor(idProperty, queryParams, printAST);
   auto resVisit = visitor.visit(cypherTree);
   
   if(!visitor.getErrors().empty())

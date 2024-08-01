@@ -11,9 +11,12 @@ namespace openCypher
 class MyCypherVisitor : public CypherVisitor
 {
 public:
-  MyCypherVisitor(PropertyKeyName const& IDProperty, bool print = false)
+  MyCypherVisitor(PropertyKeyName const& IDProperty,
+                  const std::map<SymbolicName, std::vector<std::string>>& queryParams,
+                  bool print = false)
   : m_print(print)
   , m_IDProperty(IDProperty)
+  , m_queryParams(queryParams)
   {}
   
   const std::vector<std::string>& getErrors() const { return m_errors; }
@@ -245,6 +248,7 @@ private:
   std::any aggregate(const Aggregator a, const std::vector<U>& subExpressions);
   
   PropertyKeyName m_IDProperty;
+  const std::map<SymbolicName, std::vector<std::string>>& m_queryParams;
   bool m_print;
   std::vector<std::string> m_errors;
 };
@@ -254,7 +258,9 @@ namespace detail
 std::unique_ptr<Expression> tryStealAsExpressionPtr(std::any && res);
 }
 
-// subExpressions is expected to have one or more elements.
+// subExpressions is expected to have 2 or more elements.
+// When subExpressions contains a single elementm, the caller is supposed to handle it to avoid paying the cost of
+// creating the vector for the input arguments.
 template<typename U>
 std::any MyCypherVisitor::aggregate(const Aggregator a, const std::vector<U>& subExpressions)
 {
@@ -266,7 +272,12 @@ std::any MyCypherVisitor::aggregate(const Aggregator a, const std::vector<U>& su
     return {};
   }
   else if(subExpressions.size() == 1)
-    return subExpressions[0]->accept(this);
+  {
+    m_errors.push_back(scopeName + ": single term aggregations must be handled by the caller");
+    // must be handled by the caller like this:
+    //return context->children[0]->accept(this);
+    return {};
+  }
   AggregateExpression aggregateExpr{a};
   for(const auto & expr : subExpressions)
   {

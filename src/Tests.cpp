@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <chrono>
+#include <random>
 
 #include "GraphDBSqlite.h"
 #include "CypherQuery.h"
@@ -78,17 +79,17 @@ struct QueryResultsHandler
   : m_db(db)
   {}
   
-  void run(const std::string &cypherQuery)
+  void run(const std::string &cypherQuery, const std::map<SymbolicName, std::vector<std::string>>& Params = {})
   {
     auto sqlDuration1 = m_db.getDB().m_totalSQLQueryExecutionDuration;
     auto relCbDuration1 = m_db.getDB().m_totalSystemRelationshipCbDuration;
     auto propCbDuration1 = m_db.getDB().m_totalPropertyTablesCbDuration;
 
-    auto t1 = std::chrono::steady_clock::now();
+    m_tCallRunCypher = std::chrono::steady_clock::now();
+    
+    openCypher::runCypher(cypherQuery, Params, m_db.getDB(), *this);
 
-    openCypher::runCypher(cypherQuery, m_db.getDB(), *this);
-
-    m_cypherQueryDuration = std::chrono::steady_clock::now() - t1;
+    m_cypherQueryDuration = (std::chrono::steady_clock::now() - m_tCallRunCypher) - m_cypherToASTDuration;
 
     auto sqlDuration2 = m_db.getDB().m_totalSQLQueryExecutionDuration;
     auto relCbDuration2 = m_db.getDB().m_totalSystemRelationshipCbDuration;
@@ -99,13 +100,15 @@ struct QueryResultsHandler
     m_sqlPropCbDuration = propCbDuration2 - propCbDuration1;
   }
   
-  bool printCypherAST() const { return false; }
+  bool printCypherAST() const { return m_printCypherAST; }
   
   bool m_printCypherQueryText{ false };
   bool m_printCypherRows{ false };
   
   void onCypherQueryStarts(std::string const & cypherQuery)
   {
+    m_cypherToASTDuration = std::chrono::steady_clock::now() - m_tCallRunCypher;
+
     m_rows.clear();
     m_countSQLRequestsAtBeginning = m_db.totalSQLQueriesCount();
     
@@ -150,12 +153,26 @@ struct QueryResultsHandler
 
   size_t countSQLQueries() const { return m_db.totalSQLQueriesCount() - m_countSQLRequestsAtBeginning; }
 
+  bool m_printCypherAST{};
+  
+  // Time to convert the Cypher query string to an AST
+  std::chrono::steady_clock::duration m_cypherToASTDuration{};
+
+  // Time to execute the Cypher query
   std::chrono::steady_clock::duration m_cypherQueryDuration{};
+
+  // Time to execute the SQL queries (generated for the Cypher queries)
+  // This includes m_sqlRelCbDuration below
   std::chrono::steady_clock::duration m_sqlQueriesExecutionDuration{};
+
+  // Time spent in the SQL query result callbacks (querying the system relationships table)
   std::chrono::steady_clock::duration m_sqlRelCbDuration{};
+  // Time spent in the SQL query result callbacks (querying the labeled node/relationship property tables)
   std::chrono::steady_clock::duration m_sqlPropCbDuration{};
 
 private:
+  std::chrono::steady_clock::time_point m_tCallRunCypher{};
+
   std::unique_ptr<LogIndentScope> m_logIndentScope;
   GraphDB::ResultOrder m_resultOrder;
   std::vector<openCypher::Variable> m_variables;
@@ -1106,8 +1123,8 @@ TEST(Test, LongerPathPattern)
   EXPECT_THROW(handler.run("MATCH (a)-[]-(b)<-[]-(c) return a.age, b.age, c.age"), std::exception);
 }
 
-
-TEST(Test, Perfs)
+// disabling perf test
+TEST(Test, DISABLED_Perfs1)
 {
   LogIndentScope _{};
   
@@ -1142,12 +1159,8 @@ TEST(Test, Perfs)
   std::cout << std::endl;
   std::cout << countRels << " relationships" << std::endl;
 
-  //dbWrapper->m_printSQLRequests = true;
-
   QueryResultsHandler handler(*dbWrapper);
-  
-  // Non-existing label on relationship
-  
+    
   dbWrapper->m_printSQLRequestsDuration = true;
   dbWrapper->m_printSQLRequests = true;
   handler.run("MATCH (a)-[r]->(b) WHERE a.age < 107 return a.age, b.age, r.since");
@@ -1158,6 +1171,150 @@ TEST(Test, Perfs)
   std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlQueriesExecutionDuration).count() << " us" << std::endl;
   std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlRelCbDuration).count() << " us" << std::endl;
   std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlPropCbDuration).count() << " us" << std::endl;
+}
+
+
+TEST(Test, Perfs2)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats>();
+  dbWrapper->m_printSQLRequests = false;
+  
+  auto & db = dbWrapper->getDB();
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  db.addType("WorksWith", false, {p_since});
+  
+  std::mt19937 gen;
+  
+  std::vector<ID> nodeIds;
+  nodeIds.reserve(10000);
+
+  // 5 ms per iteration without a transaction
+  // 0.1 ms per iteration with a transaction
+  // Ideally we should have one transaction per ~10000 inserts.
+  for(int i=0; i<10; ++i)
+  {
+    std::cout << i << ".";
+    db.beginTransaction();
+    for(size_t i=0; i<8000; ++i)
+      nodeIds.push_back(db.addNode("Person", {{p_age, std::to_string(i)}}));
+    db.endTransaction();
+  }
+  std::cout << std::endl;
+  std::cout << "Has created " << nodeIds.size() << " nodes" << std::endl;
+  
+  std::vector<std::pair<size_t, size_t>> rels;
+  rels.reserve(nodeIds.size());
+
+  std::uniform_int_distribution<size_t> distrNodes(0, nodeIds.size() - 1ull);
+  // pick "root" node at random
+  const auto rootNodeIdx = distrNodes(gen);
+  
+  std::vector<size_t> curNodeIDx;
+  std::vector<size_t> nextNodeIDx;
+  curNodeIDx.push_back(rootNodeIdx);
+
+  // start with 2 neighbours per node and double at each iteration.
+  for(int countNeighbours = 1;; countNeighbours++)
+  {
+    const size_t countRelsToAdd = curNodeIDx.size() * countNeighbours;
+    if(countRelsToAdd > nodeIds.size())
+      break;
+    std::cout << "will specify " << countRelsToAdd << " rels" << std::endl;
+    for(const auto nodeIdx : curNodeIDx)
+    {
+      for(int i=0; i<countNeighbours; ++i)
+      {
+        // pick neighbours at random
+        const auto neighbourIdx = distrNodes(gen);
+        nextNodeIDx.push_back(neighbourIdx);
+        rels.emplace_back(nodeIdx, neighbourIdx);
+      }
+    }
+    curNodeIDx.clear();
+    nextNodeIDx.swap(curNodeIDx);
+  }
+  std::cout << "Will create " << rels.size() << " relationships." << std::endl;
+
+  size_t relIdx{};
+  for(int i=0; i<50; ++i)
+  {
+    std::cout << i << ".";
+    db.beginTransaction();
+    for(size_t i=0; i<2000; ++i)
+    {
+      if(relIdx == rels.size())
+        break;
+      db.addRelationship("Knows", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(i)}});
+      ++relIdx;
+      if(relIdx == rels.size())
+        break;
+      db.addRelationship("WorksWith", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(2 * i)}});
+      ++relIdx;
+    }
+    db.endTransaction();
+    if(relIdx == rels.size())
+      break;
+  }
+  std::cout << std::endl;
+  std::cout << "Has created " << relIdx << " relationships" << std::endl;
+  
+  QueryResultsHandler handler(*dbWrapper);
+  
+  dbWrapper->m_printSQLRequestsDuration = true;
+  //dbWrapper->m_printSQLRequests = true;
+  //handler.m_printCypherAST = true;
+
+  std::unordered_set<std::string> nodeVisisted;
+  nodeVisisted.reserve(nodeIds.size());
+  
+  std::vector<std::string> expandFronteer{nodeIds[rootNodeIdx]};
+  for(;;)
+  {
+    if(expandFronteer.empty())
+      break;
+    std::cout << "Expanding " << expandFronteer.size() << " nodes." << std::endl;
+    std::ostringstream s;
+    bool first = true;
+    for(const auto & id : expandFronteer)
+    {
+      if(first)
+        first = false;
+      else
+        s << ", ";
+      s << id;
+    }
+
+    handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b)", {{SymbolicName{"list"}, expandFronteer}});
+    
+    std::cout << handler.countRows() << " rows fetched." << std::endl;
+    std::cout << " Cypher string to AST :";
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_cypherToASTDuration).count() << " us" << std::endl;
+    std::cout << " Cypher query handling :";
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_cypherQueryDuration).count() << " us using ";
+    std::cout << handler.countSQLQueries() << " SQL queries that ran in ";
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlQueriesExecutionDuration).count() << " us" << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlRelCbDuration).count() << " us" << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlPropCbDuration).count() << " us" << std::endl;
+
+    expandFronteer.clear();
+    
+    for(const auto & row : handler.rows())
+    {
+      ASSERT_TRUE(row[0].has_value());
+      const auto inserted = nodeVisisted.insert(*row[0]).second;
+      if(inserted)
+        expandFronteer.push_back(*row[0]);
+      else
+      {
+        // Do nothing, we have already visited this node.
+      }
+    }
+  }
 }
 
 }

@@ -572,19 +572,19 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
     }
   }
 
-  std::map<Variable, size_t> varTovarIdx;
+  std::map<Variable, size_t> varToVarIdx;
   for(const auto & [var, _] : variablesI)
-    varTovarIdx[var] = varTovarIdx.size();
+    varToVarIdx[var] = varToVarIdx.size();
 
   const size_t countDistinctVariables{variablesI.size()};
 
   std::vector<Variable> varIdxToVar(countDistinctVariables);
-  for(const auto & [var, i] : varTovarIdx)
+  for(const auto & [var, i] : varToVarIdx)
     varIdxToVar[i] = var;
 
   // To minimize allocations, we use a "struct of arrays" approach here.
   using CandidateRows = std::vector<std::vector<IDAndType>>;
-  // indexed by varTovarIdx[var]
+  // indexed by varToVarIdx[var]
   CandidateRows candidateRows(countDistinctVariables);
   
   // 1. Query relationships system table (with self joins and joins on nodes system table)
@@ -721,7 +721,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
         }
         if(pathPattern.var.has_value() && !varAlreadySeen)
         {
-          const size_t i = varTovarIdx[*pathPattern.var];
+          const size_t i = varToVarIdx[*pathPattern.var];
           const auto & info = varInfo[*pathPattern.var];
           if(info.lookupProperties)
             queryInfo.indexIDs[i] = pushSelect(columnNameForID);
@@ -828,9 +828,9 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
 
   // split nodes, dualNodes, relationships by types (if needed)
   
-  // indexed by varTovarIdx[var]
+  // indexed by varToVarIdx[var]
   std::vector<std::vector<PropertyKeyName>> strPropertiesByVar(countDistinctVariables);
-  // indexed by varTovarIdx[var]
+  // indexed by varToVarIdx[var]
   std::vector<std::unordered_map<ID, std::vector<std::optional<std::string>>>> propertiesByVar(countDistinctVariables);
 
   {
@@ -839,7 +839,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
     std::vector<std::unordered_set<ID> /* element ids*/> elementsByType(endElementType);
     for(const auto & [var, returnedProperties] : variablesI)
     {
-      const size_t i = varTovarIdx[var];
+      const size_t i = varToVarIdx[var];
       auto & props = strPropertiesByVar[i];
       for(const auto & rct : returnedProperties)
         props.push_back(rct.propertyName);
@@ -865,7 +865,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
   for(const auto & strProperties: strPropertiesByVar)
     vecColumnNames.push_back(&strProperties);
   
-  // indexed by varTovarIdx[var]
+  // indexed by varToVarIdx[var]
   VecValues vecValues(countDistinctVariables);
   std::vector<const std::vector<ReturnClauseTerm>*> vecReturnClauses(countDistinctVariables);
   std::vector<size_t> countReturnedPropsByVar(countDistinctVariables);
@@ -875,7 +875,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
 
   for(const auto & [var, returnedProperties] : variablesI)
   {
-    const size_t i = varTovarIdx[var];
+    const size_t i = varToVarIdx[var];
     vecReturnClauses[i] = &returnedProperties;
     countReturnedPropsByVar[i] = returnedProperties.size();
     propertyValues[i] = std::vector<std::optional<std::string>>{returnedProperties.size()};
@@ -923,6 +923,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
           const auto & properties = propertiesByVar[i];
           const auto itNodeProperties = properties.find(candidateRows[i][row].id);
           if(itNodeProperties == properties.end())
+            // The candidate has been discarded by one of the queries on labeled node/entity property tables.
             goto nextRow;
           vecValues[i] = &itNodeProperties->second;
         }

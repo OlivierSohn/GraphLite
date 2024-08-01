@@ -157,6 +157,15 @@ int main()
     runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
     runCypher("MATCH (e1)-[]->()-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
 
+    // TODO support prepared statements to have faster graph creation
+    // (we will have one prepared statement for creating the relationships, one for creating nodes).
+
+    // todo support LIMIT
+
+    // todo support non-equi-var expressions, by evaluating them manually before returning results.
+    
+    // todo support different property types (string, int, double)
+
     // todo write some performance tests
     // https://stackoverflow.com/questions/1711631/improve-insert-per-second-performance-of-sqlite
 
@@ -169,7 +178,7 @@ int main()
     //     use these ids to filter the relationships table.
     //   -> create a test example that shows the perf issue before trying to fix it.
 
-    // todo longer path patterns: (a)-[r1:*..3]->(b)
+    // todo variable length relationships: (a)-[r1:*..3]->(b)
     
     // todo deduce labels from where clause (used in FFP):
     //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;");

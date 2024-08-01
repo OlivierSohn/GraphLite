@@ -7,6 +7,8 @@
 #include <optional>
 #include <iostream>
 
+template < typename > constexpr bool c_false = false;
+
 namespace sql
 {
 
@@ -53,13 +55,35 @@ struct Expression
 
 struct Literal : public Expression
 {
-  Literal(std::string const& str)
-  : str(str)
+  Literal(std::variant<std::string, std::vector<std::string>> const& variant)
+  : variant(variant)
   {}
   std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
-  void toString(std::ostream& os) const override { os << str; }
+  void toString(std::ostream& os) const override {
+    std::visit([&](auto && arg) {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, std::string>)
+        os << arg;
+      else if constexpr (std::is_same_v<T, std::vector<std::string>>)
+      {
+        os << "(";
+        bool first = true;
+        for(const auto & str : arg)
+        {
+          if(first)
+            first = false;
+          else
+            os << ", ";
+          os << str;
+        }
+        os << ")";
+      }
+      else
+        static_assert(c_false<T>, "non-exhaustive visitor!");
+    }, variant);
+  }
 
-  std::string str;
+  std::variant<std::string, std::vector<std::string>> variant;
 };
 struct Field : public Expression
 {
@@ -130,6 +154,54 @@ private:
   Comparison m_comp;
   std::unique_ptr<Expression> m_right;
 };
+
+// For now does not support String / Null parts, only List part.
+struct StringListNullPredicateExpression : public Expression {
+  StringListNullPredicateExpression(std::unique_ptr<Expression> && left, std::unique_ptr<Expression> && right)
+  : m_left(std::move(left))
+  , m_right(std::move(right))
+  {
+    std::optional<Type> type;
+    if(auto lit = dynamic_cast<Literal*>(m_right.get()))
+    {
+      if(std::holds_alternative<std::vector<std::string>>(lit->variant))
+        type = Type::InList;
+    }
+    if(!type.has_value())
+      throw std::logic_error("not String / Null predicates not supported yet.");
+    m_type = *type;
+  }
+  
+  std::optional<Evaluation> tryEvaluate() override
+  {
+    // This works for the List case i.e "a.prop IN [1, 2]",
+    // but might need to be revisited for otehr cases when we support them.
+    auto leftEval = m_left->tryEvaluate();
+    auto rightEval = m_right->tryEvaluate();
+    if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
+      return Evaluation::Unknown;
+    if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
+      return Evaluation::Unknown;
+    return std::nullopt;
+  }
+  
+  void toString(std::ostream& os) const override
+  {
+    m_left->toString(os);
+    os << " IN ";
+    m_right->toString(os);
+  }
+  
+private:
+  std::unique_ptr<Expression> m_left;
+  std::unique_ptr<Expression> m_right;
+
+  enum class Type{
+    InList
+  };
+  Type m_type;
+};
+
 
 enum class Aggregator
 {

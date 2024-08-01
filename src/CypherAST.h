@@ -12,8 +12,6 @@
 
 #include "SqlAST.h"
 
-template < typename > constexpr bool c_false = false;
-
 namespace openCypher
 {
 using Comparison = sql::Comparison;
@@ -111,9 +109,15 @@ struct Pattern
 {
   std::vector<PatternPart> patternParts;
 };
+// Should this inherit from Expression? in the sql AST, sql::Literal inherits from sql::Expression.
 struct Literal
 {
-  std::string str;
+  std::variant<std::string, std::vector<std::string>> variant;
+  
+  std::unique_ptr<sql::Expression> toSQLExpressionTree() const
+  {
+    return std::make_unique<sql::Literal>(variant);
+  }
 };
 struct PropertyKeyName
 {
@@ -442,7 +446,7 @@ struct NonArithmeticOperatorExpression : public Expression
       {
         if(mayPropertyName.has_value())
           throw std::logic_error("A literal should have no property");
-        return std::make_unique<sql::Literal>(arg.str);
+        return std::make_unique<sql::Literal>(arg.variant);
       }
       else if constexpr (std::is_same_v<T, AggregateExpression>)
       {
@@ -505,6 +509,44 @@ struct ComparisonExpression : public Expression {
     return std::make_unique<sql::ComparisonExpression>(std::move(left), partial.comp, std::move(right));
   }
 };
+
+
+// For now does not support String / Null parts, only List part.
+struct StringListNullPredicateExpression : public Expression {
+  static constexpr const char * c_name {"ComparisonExpression"};
+  
+  NonArithmeticOperatorExpression leftExp;
+  
+  // will be a variant later.
+  // For the List case, inList.variant is a std::vector<std::string>
+  Literal inList;
+  
+  std::unique_ptr<Expression> StealAsPtr() override
+  {
+    auto ptr = std::make_unique<StringListNullPredicateExpression>();
+    *ptr = std::move(*this);
+    return ptr;
+  };
+  
+  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
+  {
+    exprs[varsAndProperties()].push_back(this);
+  }
+  VarsAndProperties varsAndProperties() const override
+  {
+    return leftExp.varsAndProperties();
+  }
+  
+  std::unique_ptr<sql::Expression>
+  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
+  {
+    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
+    std::unique_ptr<sql::Expression> right = inList.toSQLExpressionTree();
+    return std::make_unique<sql::StringListNullPredicateExpression>(std::move(left), std::move(right));
+  }
+};
+
 
 struct WhereClause{
   // cannot be unique_ptr because std::any only wraps classes that are copyable.
