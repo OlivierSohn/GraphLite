@@ -1302,7 +1302,7 @@ TEST(Test, Perfs2)
   
   // TODO make a parametrized tests.
   // See results in comment above this test.
-  const size_t countNodes {64000};
+  const size_t countNodes {640000};
   std::vector<ID> nodeIds;
   nodeIds.reserve(10000);
 

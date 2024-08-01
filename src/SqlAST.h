@@ -12,6 +12,24 @@ template < typename > constexpr bool c_false = false;
 namespace sql
 {
 
+struct QueryVars
+{
+  // There is a convention in sqlite to identify bound variables by their position in the query.
+  // So the order of calls to this method must match the query string order.
+  std::string addVar(std::vector<int64_t> const & value)
+  {
+    std::string varName{"?" + std::to_string(m_nextKey)};
+    m_variables[m_nextKey] = value;
+    ++m_nextKey;
+    return varName;
+  }
+  const std::map<int, std::vector<int64_t>> & vars() const { return m_variables; }
+private:
+  // key starts at 1
+  std::map<int, std::vector<int64_t>> m_variables;
+  int m_nextKey {1};
+};
+
 enum class Comparison
 {
   EQ, // =
@@ -50,48 +68,45 @@ struct Expression
 
   virtual std::optional<Evaluation> tryEvaluate() = 0;
   
-  virtual void toString(std::ostream& os) const = 0;
+  virtual void toString(std::ostream& os, QueryVars& vars) const = 0;
 };
 
 struct Literal : public Expression
 {
-  Literal(std::variant<std::string, std::vector<std::string>> const& variant)
+  Literal(std::variant<std::string, std::vector<int64_t>> const& variant)
   : variant(variant)
   {}
   std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
-  void toString(std::ostream& os) const override {
+  void toString(std::ostream& os, QueryVars& vars) const override {
     std::visit([&](auto && arg) {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, std::string>)
         os << arg;
-      else if constexpr (std::is_same_v<T, std::vector<std::string>>)
+      else if constexpr (std::is_same_v<T, std::vector<int64_t>>)
       {
-        os << "(";
-        bool first = true;
-        for(const auto & str : arg)
-        {
-          if(first)
-            first = false;
-          else
-            os << ", ";
-          os << str;
-        }
-        os << ")";
+        // Note that using a bound variable with carray has not increased performance noticeably.
+        if(!m_varName.has_value())
+          m_varName = vars.addVar(arg);
+        os << "carray(" << *m_varName << ")";
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     }, variant);
   }
 
-  std::variant<std::string, std::vector<std::string>> variant;
+  std::variant<std::string, std::vector<int64_t>> variant;
+
+private:
+  mutable std::optional<std::string> m_varName;
 };
+
 struct Field : public Expression
 {
   Field(std::string const& str)
   : str(str)
   {}
   std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
-  void toString(std::ostream& os) const override
+  void toString(std::ostream& os, QueryVars& vars) const override
   {
     os << str;
   }
@@ -103,7 +118,7 @@ struct Field : public Expression
 struct Null : public Expression
 {
   std::optional<Evaluation> tryEvaluate() override { return Evaluation::Unknown; }
-  void toString(std::ostream& os) const override { os << "NULL"; }
+  void toString(std::ostream& os, QueryVars& vars) const override { os << "NULL"; }
 };
 
 struct ComparisonExpression : public Expression {
@@ -140,13 +155,13 @@ struct ComparisonExpression : public Expression {
     return std::nullopt;
   }
 
-  void toString(std::ostream& os) const override
+  void toString(std::ostream& os, QueryVars& vars) const override
   {
-    m_left->toString(os);
+    m_left->toString(os, vars);
     os << " ";
     os << toStr(m_comp);
     os << " ";
-    m_right->toString(os);
+    m_right->toString(os, vars);
   }
 
 private:
@@ -164,7 +179,7 @@ struct StringListNullPredicateExpression : public Expression {
     std::optional<Type> type;
     if(auto lit = dynamic_cast<Literal*>(m_right.get()))
     {
-      if(std::holds_alternative<std::vector<std::string>>(lit->variant))
+      if(std::holds_alternative<std::vector<int64_t>>(lit->variant))
         type = Type::InList;
     }
     if(!type.has_value())
@@ -185,11 +200,11 @@ struct StringListNullPredicateExpression : public Expression {
     return std::nullopt;
   }
   
-  void toString(std::ostream& os) const override
+  void toString(std::ostream& os, QueryVars& vars) const override
   {
-    m_left->toString(os);
+    m_left->toString(os, vars);
     os << " IN ";
-    m_right->toString(os);
+    m_right->toString(os, vars);
   }
   
 private:
@@ -293,7 +308,7 @@ struct AggregateExpression : public Expression
     throw std::logic_error("invalid enum value");
   }
 
-  void toString(std::ostream& os) const override {
+  void toString(std::ostream& os, QueryVars& vars) const override {
     bool first = true;
     for(const auto & subExpr : m_subExprs)
     {
@@ -302,7 +317,7 @@ struct AggregateExpression : public Expression
       else
         os << toStr(m_aggregator);
       os << " (";
-      subExpr->toString(os);
+      subExpr->toString(os, vars);
       os << ") ";
     }
   }

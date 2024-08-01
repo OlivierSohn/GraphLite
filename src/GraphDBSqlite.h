@@ -230,11 +230,19 @@ private:
                             const std::map<Variable, VariablePostFilters>& postFilters,
                             std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties) const;
 
+  // this method is timed
   int sqlite3_exec(const std::string& queryStr,
                    int (*callback)(void*,int,char**,char**),
                    void *,
-                   char **errmsg) const;
-  
+                   const char **errmsg,
+                   const sql::QueryVars& sqlVars = {}) const;
+
+  int sqlite3_exec_notime(const std::string& queryStr,
+                          const sql::QueryVars& arrayVariables,
+                          int (*callback)(void*,int,char**,char**),
+                          void *,
+                          const char **errmsg) const;
+
   size_t getEndElementType() const;
 };
 

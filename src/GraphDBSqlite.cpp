@@ -2,11 +2,21 @@
 #include "Logs.h"
 #include "SqlAST.h"
 
+#include "sqlext/carray.h"
+
 #include <iostream>
 #include <filesystem>
 #include <sstream>
 #include <numeric>
 
+extern "C"
+{
+SQLITE_API int sqlite3_carray_init(
+                        sqlite3 *db,
+                        char **pzErrMsg,
+                        const sqlite3_api_routines *pApi
+                        );
+}
 
 struct IDAndType
 {
@@ -46,7 +56,16 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration
 
   if(auto res = sqlite3_open(dbFile.string().c_str(), &m_db))
     throw std::logic_error(sqlite3_errstr(res));
-  
+  char* msg{};
+  // to load the extension dynamically:
+  /*if(auto res = sqlite3_db_config(m_db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1, 0))
+     throw std::logic_error(sqlite3_errstr(res));
+  if(auto res = sqlite3_load_extension(m_db, "carray", 0, &msg))
+     throw std::logic_error(msg);*/
+  // but here we have the extension linked statically so we initialize the extension manually:
+  if(auto res = sqlite3_carray_init(m_db, &msg, nullptr))
+    throw std::logic_error(msg);
+
   // TODO do not overwrite tables, read types from namedTypes.
   
   {
@@ -169,7 +188,7 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
     << (isNode ? "E" : "R")
     << "') RETURNING TypeIdx";
     size_t typeIdx{std::numeric_limits<size_t>::max()};
-    char* msg{};
+    const char* msg{};
     if(auto res = sqlite3_exec(s.str(), [](void *p_typeIdx, int argc, char **argv, char **column) {
       auto & typeIdx = *static_cast<size_t*>(p_typeIdx);
       for (int i=0; i< argc; i++)
@@ -424,7 +443,8 @@ std::vector<size_t> GraphDB::labelsToTypeIndices(const Element elem, const std::
 bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
                            const std::set<openCypher::PropertyKeyName>& sqlFields,
                            const std::map<openCypher::Variable, std::map<openCypher::PropertyKeyName, std::string>>& propertyMappingCypherToSQL,
-                           std::string& sqlFilter)
+                           std::string& sqlFilter,
+                           sql::QueryVars & vars)
 {
   sqlFilter.clear();
   if(cypherExprs.empty())
@@ -456,7 +476,7 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
     }
   }
   std::ostringstream s;
-  sqlExpr->toString(s);
+  sqlExpr->toString(s, vars);
   sqlFilter = s.str();
   return true;
 }
@@ -604,6 +624,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
     queryInfo.indexTypes.resize(countDistinctVariables);
 
     std::ostringstream s;
+    sql::QueryVars sqlVars;
 
     {
       s << "SELECT ";
@@ -756,7 +777,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
         for(const auto & [var, idField] : variableToIDField)
           propertyMappingCypherToSQL[var][m_idProperty] = idField;
         std::string sqlFilter;
-        if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter))
+        if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter, sqlVars))
           throw std::logic_error("[Unexpected] Expressions in idFilters are all equi-property with property m_idProperty");
         if(!sqlFilter.empty())
           constraints.push_back("( " + sqlFilter + " )");
@@ -798,7 +819,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
       }
     }
 
-    char*msg{};
+    const char*msg{};
     if(auto res = sqlite3_exec(s.str(), [](void *p_queryInfo, int argc, char **argv, char **column) {
       const auto t1 = std::chrono::system_clock::now();
       
@@ -820,7 +841,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
       const auto duration = std::chrono::system_clock::now() - t1;
       queryInfo.totalSystemRelationshipCbDuration += duration;
       return 0;
-    }, &queryInfo, &msg))
+    }, &queryInfo, &msg, sqlVars))
       throw std::logic_error(msg);
   }
 
@@ -1122,10 +1143,11 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
       }
     };
     
+    sql::QueryVars sqlVars;
     if(!idFilters.empty())
     {
       std::string sqlFilter;
-      if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter))
+      if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter, sqlVars))
         throw std::logic_error("Should never happen: expressions in *FilterIDs are all equi-property with property m_idProperty");
       if(!sqlFilter.empty())
       {
@@ -1163,7 +1185,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     tryFilterTypes(nodeTypesFilter, "nodes.NodeType");
     tryFilterTypes(dualNodeTypesFilter, "dualNodes.NodeType");
 
-    char*msg{};
+    const char*msg{};
     if(auto res = sqlite3_exec(s.str(), [](void *p_queryInfo, int argc, char **argv, char **column) {
       const auto t1 = std::chrono::system_clock::now();
 
@@ -1185,7 +1207,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
       const auto duration = std::chrono::system_clock::now() - t1;
       queryInfo.totalSystemRelationshipCbDuration += duration;
       return 0;
-    }, &queryInfo, &msg))
+    }, &queryInfo, &msg, sqlVars))
       throw std::logic_error(msg);
   }
   
@@ -1368,6 +1390,8 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
                                                  const std::vector<const Expression*>* filter,
                                                  FuncResults& f)
 {
+  sql::QueryVars sqlVars;
+
   // extract property names
   std::vector<PropertyKeyName> propertyNames;
   propertyNames.reserve(returnClauseTerms.size());
@@ -1408,7 +1432,7 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
       continue;
     std::string sqlFilter{};
     if(filter && !filter->empty())
-      if(!toEquivalentSQLFilter(*filter, m_properties[label], {}, sqlFilter))
+      if(!toEquivalentSQLFilter(*filter, m_properties[label], {}, sqlFilter, sqlVars))
         // These items are excluded by the filter.
         continue;
     // in forEachNodeAndRelatedRelationship we have an optimization where
@@ -1440,7 +1464,7 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
   const std::string req = s.str();
   if(!req.empty())
   {
-    char*msg{};
+    const char*msg{};
     if(auto res = sqlite3_exec(req, [](void *p_results, int argc, char **argv, char **column) {
       auto & results = *static_cast<Results*>(p_results);
       for(int i=0; i<argc; ++i)
@@ -1450,7 +1474,7 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
       }
       results.m_f(results.m_resultsOrder, results.m_orderedVariables, results.m_vecColumnNames, results.m_vecValues);
       return 0;
-    }, &results, &msg))
+    }, &results, &msg, sqlVars))
       throw std::logic_error(msg);
   }
 }
@@ -1598,7 +1622,8 @@ void GraphDB::gatherPropertyValues(const Variable& var,
 {
   bool firstOutter = true;
   std::ostringstream s;
-  
+  sql::QueryVars sqlVars;
+
   const VariablePostFilters * postFilterForVar{};
   
   if(const auto it = postFilters.find(var); it != postFilters.end())
@@ -1624,7 +1649,7 @@ void GraphDB::gatherPropertyValues(const Variable& var,
       auto it = m_properties.find(label);
       if(it == m_properties.end())
         throw std::logic_error("[Unexpected] Label not found in properties.");
-      if(!toEquivalentSQLFilter(postFilterForVar->filters, it->second, {}, sqlFilter))
+      if(!toEquivalentSQLFilter(postFilterForVar->filters, it->second, {}, sqlFilter, sqlVars))
         // These items are excluded by the filter.
         continue;
     }
@@ -1717,7 +1742,7 @@ void GraphDB::gatherPropertyValues(const Variable& var,
       const auto duration = std::chrono::system_clock::now() - t1;
       queryData.totalPropertyTablesCbDuration += duration;
       return 0;
-    }, &queryData, 0))
+    }, &queryData, 0, sqlVars))
       throw std::logic_error(sqlite3_errstr(res));
   }
 }
@@ -1737,18 +1762,84 @@ size_t GraphDB::getEndElementType() const
 int GraphDB::sqlite3_exec(const std::string& queryStr,
                           int (*callback)(void*,int,char**,char**),
                           void * cbParam,
-                          char **errmsg) const
+                          const char **errmsg,
+                          const sql::QueryVars& sqlVars) const
 {
   m_fOnSQLQuery(queryStr);
 
   const auto t1 = std::chrono::system_clock::now();
 
-  const auto res = ::sqlite3_exec(m_db, queryStr.c_str(), callback, cbParam, errmsg);
+  const auto res = sqlite3_exec_notime(queryStr, sqlVars, callback, cbParam, errmsg);
 
   const auto duration = std::chrono::system_clock::now() - t1;
   m_totalSQLQueryExecutionDuration += duration;
 
   m_fOnSQLQueryDuration(duration);
 
+  return res;
+}
+
+int GraphDB::sqlite3_exec_notime(const std::string& queryStr,
+                                 const sql::QueryVars& sqlVars,
+                                 int (*callback)(void*,int,char**,char**),
+                                 void * cbParam,
+                                 const char **errmsg) const
+{
+  // equivalent to this, except for the error message part.
+  //return ::sqlite3_exec(m_db, queryStr.c_str(), callback, cbParam, errmsg);
+  if(errmsg)
+    errmsg = nullptr;
+  sqlite3_stmt* stmt{};
+  int res{};
+  if(res = sqlite3_prepare_v2(m_db, queryStr.c_str(), queryStr.size() + 1ull, &stmt, nullptr))
+  {
+    if(errmsg)
+      *errmsg = sqlite3_errmsg(m_db);
+    return res;
+  }
+  const auto nCols = sqlite3_column_count(stmt);
+  std::vector<const char*> rowResults;
+  std::vector<const char*> colNames;
+  bool vecInitialized = false;
+  for(const auto & [i, v] : sqlVars.vars())
+    if(res = sqlite3_carray_bind(stmt, i, const_cast<int64_t*>(v.data()), static_cast<int>(v.size()), CARRAY_INT64, SQLITE_STATIC))
+      goto end;
+      
+nextRow:
+  res = sqlite3_step(stmt);
+  if(res == SQLITE_ROW)
+  {
+    if(callback)
+    {
+      if(!vecInitialized)
+      {
+        vecInitialized = true;
+        rowResults.resize(nCols);
+        colNames.resize(nCols);
+        for(int i=0; i<nCols; ++i)
+          colNames[i] = sqlite3_column_name(stmt, i);
+      }
+      for(int i=0; i<nCols; ++i)
+        rowResults[i] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, i));
+      if(auto cbRes = callback(cbParam,
+                               nCols,
+                               const_cast<char**>(rowResults.data()),
+                               const_cast<char**>(colNames.data())))
+      {
+        res = SQLITE_ABORT;
+        goto end;
+      }
+    }
+    goto nextRow;
+  }
+  else if(res == SQLITE_DONE)
+    res = SQLITE_OK;
+  else
+  {
+    if(errmsg)
+      *errmsg = sqlite3_errmsg(m_db);
+  }
+end:
+  sqlite3_finalize(stmt);
   return res;
 }
