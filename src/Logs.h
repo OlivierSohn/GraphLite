@@ -3,6 +3,7 @@
 #include <ostream>
 #include <string>
 #include <charconv>
+#include <chrono>
 
 // RAII-object to indent logs in a scope.
 struct LogIndentScope
@@ -33,8 +34,26 @@ LogIndentScope logScope(std::ostream& os, const std::string& scopeName);
 // splitOn('test', '12test45test67') returns '12', 'test', '45', 'test', '67'.
 std::vector<std::string> splitOn(const std::string& match, std::string const & req);
 
+/*
+ If columnNames is not null:
+ 
+ |---------|---------|
+ | column0 | column1 |
+ |---------|---------|
+ | 3       |  hello  |
+ | 4       |  world  |
+ |---------|---------|
+ 
+ If columnNames is null:
+ 
+ |---------|---------|
+ | 3       |  hello  |
+ | 4       |  world  |
+ |---------|---------|
+ 
+ */
 void printChart(std::ostream&,
-                std::vector<std::string> const & columnNames,
+                std::vector<std::string> const * columnNames,
                 std::vector<std::vector<std::string>> const & values);
 
 inline int64_t strToInt64(std::string const & str)
@@ -56,3 +75,30 @@ inline int64_t strToInt64(std::string const & str)
     throw std::logic_error("Number is larger than int64 :'" + str + "'");
 }
 
+struct Timer
+{
+  Timer(std::ostream& os)
+  : m_os(os)
+  {
+    m_start = std::chrono::steady_clock::now();
+  }
+  void endStep(const std::string& title)
+  {
+    const auto dt = std::chrono::steady_clock::now() - m_start;
+    m_start = std::chrono::steady_clock::now();
+    auto & values = m_rows.emplace_back();
+    values.push_back(title);
+    values.push_back(std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(dt).count()) + " ms");
+    m_os << "[" << values[0] << "] " << values[1] << std::endl;
+  }
+  
+  ~Timer()
+  {
+    std::vector<std::string> columns{"Step", "Duration"};
+    printChart(m_os, &columns, m_rows);
+  }
+private:
+  std::chrono::steady_clock::time_point m_start;
+  std::ostream& m_os;
+  std::vector<std::vector<std::string>> m_rows;
+};

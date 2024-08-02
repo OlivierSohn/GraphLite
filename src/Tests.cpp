@@ -1645,18 +1645,25 @@ TEST(Test, DISABLED_Perfs1)
  */
 TEST(Test, Perfs2)
 {
+  Timer timer{std::cout};
+
   LogIndentScope _{};
   
   auto dbWrapper = std::make_unique<GraphWithStats>();
   dbWrapper->m_printSQLRequests = false;
   
   auto & db = dbWrapper->getDB();
+  
+  timer.endStep("System tables creation");
+  
   const auto p_age = mkProperty("age");
   const auto p_since = mkProperty("since");
   db.addType("Person", true, {p_age});
   db.addType("Knows", false, {p_since});
   db.addType("WorksWith", false, {p_since});
-  
+
+  timer.endStep("Non-system labeled entity/relationship property tables creation");
+
   std::mt19937 gen;
   
   // TODO make a parametrized tests.
@@ -1671,7 +1678,7 @@ TEST(Test, Perfs2)
   // Ideally we should have one transaction per ~10000 inserts.
   for(int i=0;; ++i)
   {
-    std::cout << i << ".";
+    std::cout << i << "." << std::flush;
     db.beginTransaction();
     for(size_t i=0; i<maxAge; ++i)
     {
@@ -1684,8 +1691,8 @@ TEST(Test, Perfs2)
       break;
   }
   std::cout << std::endl;
-  std::cout << "Has created " << nodeIds.size() << " nodes" << std::endl;
-  
+  timer.endStep(std::to_string(nodeIds.size()) + " nodes creation");
+
   std::vector<std::pair<size_t, size_t>> rels;
   rels.reserve(nodeIds.size());
 
@@ -1722,7 +1729,7 @@ TEST(Test, Perfs2)
   size_t relIdx{};
   for(int i=0;; ++i)
   {
-    std::cout << i << ".";
+    std::cout << i << "." << std::flush;
     db.beginTransaction();
     for(size_t i=0; i<4000; ++i)
     {
@@ -1740,8 +1747,8 @@ TEST(Test, Perfs2)
       break;
   }
   std::cout << std::endl;
-  std::cout << "Has created " << relIdx << " relationships" << std::endl;
-  
+  timer.endStep(std::to_string(relIdx) + " relationships creation");
+
   QueryResultsHandler handler(*dbWrapper);
   
   //dbWrapper->m_printSQLRequestsDuration = true;
@@ -1784,6 +1791,8 @@ TEST(Test, Perfs2)
       s << id;
     }
 
+    // Performances related to these queries are documented in the comment above this test function.
+
     handler.run("MATCH (a)-[r]->(b)-[r2]->(c)-[r3]->(d) WHERE id(a) IN $list AND b.age < 6000 AND c.age > 2000 return id(b), d.age", {{SymbolicName{"list"}, expandFronteer}});
     //handler.run("MATCH (a)-[r]->(b)-[r2]->(c)-[r3]->(d) WHERE id(a) IN $list return id(b), d.age", {{SymbolicName{"list"}, expandFronteer}});
     //handler.run("MATCH (a)-[r]->(b)-[r2]->(c) WHERE id(a) IN $list return id(b), c.age", {{SymbolicName{"list"}, expandFronteer}});
@@ -1816,7 +1825,9 @@ TEST(Test, Perfs2)
       }
     }
   }
-  
+
+  timer.endStep("Expand queries");
+
   auto writeMicros = [](auto duration){
     std::ostringstream s;
     s << std::chrono::duration_cast<std::chrono::microseconds>(duration).count() << " us";
@@ -1885,7 +1896,7 @@ TEST(Test, Perfs2)
     ++expandIdx;
   }
   std::cout << "For countNodes = " << countNodes << std::endl;
-  printChart(std::cout, columnNames, values);
+  printChart(std::cout, &columnNames, values);
 }
 
 }
