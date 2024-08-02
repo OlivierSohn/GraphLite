@@ -56,6 +56,9 @@ private:
   std::optional<Index> m_maxIndex;
 };
 
+// Node and relationship IDs.
+// Internally they are converted to int64 so if the string doesn't represent an int64
+// there will be exceptions thrown.
 using ID = std::string;
 
 enum class Element{
@@ -68,15 +71,8 @@ struct ReturnClauseTerm
   // position of the term in the return clause.
   size_t returnClausePosition;
 
-  openCypher::PropertyKeyName propertyName; // TODO support more later...
-};
-
-struct VariableAndReturnedProperties
-{
-  openCypher::Variable var;
-  
-  // These properties are assoviated to the Variable |var|.
-  std::vector<ReturnClauseTerm> returnedProperties;
+  // TODO support more later.
+  openCypher::PropertyKeyName propertyName;
 };
 
 struct PathPatternElement
@@ -159,18 +155,7 @@ struct GraphDB
                                           const std::vector<const Expression*>* filter,
                                           const std::optional<Limit>& limit,
                                           FuncResults& f);
-  
-  void forEachNodeAndRelatedRelationship(const TraversalDirection,
-                                         const VariableAndReturnedProperties* nodeVar,
-                                         const VariableAndReturnedProperties* relVar,
-                                         const VariableAndReturnedProperties* dualNodeVar,
-                                         const std::vector<std::string>& nodeLabelsStr,
-                                         const std::vector<std::string>& relLabelsStr,
-                                         const std::vector<std::string>& dualNodeLabelsStr,
-                                         const ExpressionsByVarAndProperties& allFilters,
-                                         const std::optional<Limit>& limit,
-                                         FuncResults& f);
-  
+
   struct VariableInfo {
     bool needsTypeInfo{};
     bool lookupProperties{};

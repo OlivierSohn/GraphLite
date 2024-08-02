@@ -103,7 +103,6 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   
   if(spq.mayReadingClause->match.where.has_value())
     // If the tree is not Equi-var, an exception is thrown.
-    // todo: support non-Equi-var trees (i.e: WHERE n.weight > 3 OR r.status = 2)
     spq.mayReadingClause->match.where->exp->asMaximalANDAggregation(whereExprsByVarsAndproperties);
   
   const auto & app = mpp.anonymousPatternPart;
@@ -118,17 +117,6 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
     if(auto it = props.find(var); it != props.end())
       return it->second;
     return {};
-  };
-  auto mkVariableAndReturnedProperties = [&](std::optional<Variable> const & mayVar)
-  {
-    std::unique_ptr<VariableAndReturnedProperties> res;
-    if(mayVar.has_value())
-    {
-      res = std::make_unique<VariableAndReturnedProperties>();
-      res->var = *mayVar;
-      res->returnedProperties = mkReturnedProperties(*mayVar);
-    }
-    return res;
   };
   
   auto nodePatternIsActive = [&](const NodePattern& np)
@@ -152,55 +140,9 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   countActiveNodePaterns += nodePatternIsActive(app.firstNodePattern);
   for(const auto & pec : app.patternElementChains)
     countActiveNodePaterns += nodePatternIsActive(pec.nodePattern);
-  
-  if((app.patternElementChains.size() == 1) && (countActiveNodePaterns > 0))
-  {
-    const auto& nodeVariable = app.firstNodePattern.mayVariable;
-    const auto& relVariable = app.patternElementChains[0].relPattern.mayVariable;
-    const auto& dualNodeVariable = app.patternElementChains[0].nodePattern.mayVariable;
-    
-    const auto& nodeLabels = app.firstNodePattern.labels;
-    const auto& relLabels = app.patternElementChains[0].relPattern.labels;
-    const auto& dualNodeLabels = app.patternElementChains[0].nodePattern.labels;
 
-    {
-      // Sanity check.
-      
-      std::set<Variable> allVariables;
-      if(nodeVariable.has_value())
-        allVariables.insert(*nodeVariable);
-      if(relVariable.has_value())
-        allVariables.insert(*relVariable);
-      if(dualNodeVariable.has_value())
-        allVariables.insert(*dualNodeVariable);
-      
-      for(const auto & [varName, _] : props)
-        if(0 == allVariables.count(varName))
-          throw std::logic_error("A variable used in the return clause was not defined.");
-      
-      for(const auto& [varAndProperties, _]: whereExprsByVarsAndproperties)
-        for(const auto& [var, _]: varAndProperties)
-          if(0 == allVariables.count(var))
-            throw std::logic_error("A variable used in the where clause was not defined.");
-    }
-
-    std::unique_ptr<VariableAndReturnedProperties> nodeVarAndReturnedProps = mkVariableAndReturnedProperties(nodeVariable);
-    std::unique_ptr<VariableAndReturnedProperties> relVarAndReturnedProps = mkVariableAndReturnedProperties(relVariable);
-    std::unique_ptr<VariableAndReturnedProperties> dualNodeVarAndReturnedProps = mkVariableAndReturnedProperties(dualNodeVariable);
-    
-    db.forEachNodeAndRelatedRelationship(app.patternElementChains[0].relPattern.traversalDirection,
-                                         nodeVarAndReturnedProps.get(),
-                                         relVarAndReturnedProps.get(),
-                                         dualNodeVarAndReturnedProps.get(),
-                                         asStringVec(nodeLabels),
-                                         asStringVec(relLabels),
-                                         asStringVec(dualNodeLabels),
-                                         whereExprsByVarsAndproperties,
-                                         limit,
-                                         f);
-    return;
-  }
-  else if(app.patternElementChains.size() > 1)
+  if(((app.patternElementChains.size() == 1) && (countActiveNodePaterns > 0)) ||
+      app.patternElementChains.size() > 1)
   {
     std::map<Variable, std::vector<ReturnClauseTerm>> variables;
     std::vector<PathPatternElement> pathPatternElements;

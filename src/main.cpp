@@ -162,8 +162,6 @@ int main()
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 0;");
 
-    // todo factorize code in DB (small / large path pattern) : use variant for vector vs unordered_set on ids of relationships?
-
     // todo split test code (Perf / non perf)
 
     // todo optimize LIMIT implementation to reduce the numbers of SQL rows fetched:
@@ -185,11 +183,9 @@ int main()
     // todo RETURN entire elements
 
     // todo support non-equi-var expressions, by evaluating them manually before returning results.
-    
-    // todo support different property types (string, int, double)
+    // i.e: WHERE n.weight > 3 OR r.status = 2
 
-    // todo write some performance tests
-    // https://stackoverflow.com/questions/1711631/improve-insert-per-second-performance-of-sqlite
+    // todo support different property types (string, int, double)
 
     // TODO support UNION
 
