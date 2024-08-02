@@ -618,12 +618,10 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
                           const std::optional<Limit>& limit,
                           FuncResults& f)
 {
-  // Todo : How to efficiently implement TraversalDirection::Any?
-  // - Have a reversed version of the relationship in the table
-  
-  for(const auto & d : traversalDirections)
-    if(d == TraversalDirection::Any)
-      throw std::logic_error("[Not supported] Undirected relationship in complex path pattern.");
+  const bool hasTraversalDirectionAny =
+  std::find(traversalDirections.begin(),
+            traversalDirections.end(),
+            TraversalDirection::Any) != traversalDirections.end();
   
   const size_t pathPatternSize{pathPattern.size()};
 
@@ -701,6 +699,16 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
     sql::QueryVars sqlVars;
 
     {
+      if(hasTraversalDirectionAny)
+      {
+        // TODO replace undirectedRelationships by a VIEW,
+        // check performance is the same on large graph.
+        s <<R"V0G0N(WITH undirectedRelationships(SYS__ID, RelationshipType, OriginID, DestinationID) as NOT MATERIALIZED(
+  SELECT A.SYS__ID, A.RelationshipType, A.OriginID, A.DestinationID FROM relationships A
+  UNION ALL
+  SELECT B.SYS__ID, B.RelationshipType, B.DestinationID, B.OriginID FROM relationships B)
+)V0G0N";
+      }
       s << "SELECT ";
       unsigned selectIndex{};
       auto pushSelect = [&](const std::string& columnName)
@@ -749,14 +757,19 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
         const std::string relationshipTableJoinAlias{"R" + std::to_string(relJoinIndex)};
 
         if(relationshipSelfJoins.size() == relJoinIndex)
-          relationshipSelfJoins.push_back("relationships " + relationshipTableJoinAlias);
+        {
+          if(traversalDirection == TraversalDirection::Any)
+            relationshipSelfJoins.push_back("undirectedRelationships " + relationshipTableJoinAlias);
+          else
+            relationshipSelfJoins.push_back("relationships " + relationshipTableJoinAlias);
+        }
 
         std::string columnNameForID(relationshipTableJoinAlias);
         std::optional<std::string> columnNameForType;
         if(elem == Element::Node)
         {
-          if(traversalDirection == TraversalDirection::Any)
-            throw std::logic_error("[Not supported] Undirected relationship in complex path pattern.");
+          // For the TraversalDirection::Any case, we use a view on relationships table that duplicates
+          // the relationships to have the symmetrical relationships as well.
           const bool isOrigin = isFirstNode != (traversalDirection == TraversalDirection::Backward);
           columnNameForID += isOrigin ? ".OriginID" : ".DestinationID";
           prevToField = columnNameForID;
@@ -793,9 +806,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
             return;
           if(!prevToField.has_value())
             throw std::logic_error("[Unexpected]");
-          if(traversalDirection == TraversalDirection::Any)
-            throw std::logic_error("[Not supported] Undirected relationship in complex path pattern.");
-          const std::string curFromField = relationshipTableJoinAlias + ((traversalDirection == TraversalDirection::Forward) ? ".OriginID" : ".DestinationID");
+          const std::string curFromField = relationshipTableJoinAlias + ((traversalDirection == TraversalDirection::Backward) ? ".DestinationID" : ".OriginID");
           if(*prevToField != curFromField)
             constraints.push_back("(" + *prevToField + " = " + curFromField + ")");
           if(!prevRelationshipIDFields.empty())

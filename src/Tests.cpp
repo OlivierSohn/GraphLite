@@ -1023,8 +1023,8 @@ TEST(Test, LongerPathPattern)
   
   auto & db = dbWrapper->getDB();
   /*
-   -----
-   v     |
+          -----
+         v     |
    p1 -> p2 -> p3 -> p4
    ^                 |
    -----------------
@@ -1062,6 +1062,42 @@ TEST(Test, LongerPathPattern)
         {"3"}, {"4"}, {"1"}
       }, {
         {"4"}, {"1"}, {"2"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+  
+  // With one undirected relationship
+  
+  handler.run("MATCH (a)-[r1]-(b)-[r2]->(c) WHERE c.age = 3 return a.age, r1.since, b.age, r2.since");
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"3"}, {"32"}, {"2"}, {"23"}
+      }, {
+        {"1"}, {"12"}, {"2"}, {"23"}
+      },
+    };
+    const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+
+  // With two undirected relationships
+  
+  handler.run("MATCH (a)-[r1]-(b)-[r2]-(c) WHERE c.age = 3 return a.age, r1.since, b.age, r2.since");
+  {
+    const std::set<std::vector<std::optional<std::string>>> expectedRes{
+      {
+        {"3"}, {"32"}, {"2"}, {"23"}
+      }, {
+        {"1"}, {"12"}, {"2"}, {"23"}
+      }, {
+        {"3"}, {"23"}, {"2"}, {"32"}
+      }, {
+        {"1"}, {"12"}, {"2"}, {"32"}
+      }, {
+        {"1"}, {"41"}, {"4"}, {"34"}
       },
     };
     const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
@@ -1125,9 +1161,6 @@ TEST(Test, LongerPathPattern)
     const std::set<std::vector<std::optional<std::string>>> actualRes(handler.rows().begin(), handler.rows().end());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
-  // longer path patterns do not support "any" traversal direction for relationships yet.
-  EXPECT_THROW(handler.run("MATCH (a)-[]-(b)<-[]-(c) return a.age, b.age, c.age"), std::exception);
 }
 
 
@@ -1185,8 +1218,9 @@ TEST(Test, Limit)
 }
 
 
-
 /*
+ [Performance charts made using the test below this comment.]
+ 
  ----------------------------------------------------
  Simplest query:
 

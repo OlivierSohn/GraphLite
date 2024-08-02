@@ -173,9 +173,11 @@ int main()
     //     then at each iteration
     //       page_size *= 2;
     //   the worst case is if there are many relationships (~100 millions) and the post filtering only allows one:
-    //     MATCH (a)-[]->(b) WHERE b.name = 'Albert Einstein' RETURN id(r) LIMIT 1
-    //     MATCH (a)-[]->(b) WHERE b.name = 'Albert Einstein' AND a.name = 'xyz' RETURN id(r) LIMIT 1
-    //         in this case we should rather start querying for b, using the post filter constraint, and then only query
+    //     MATCH (a)-[r]->(b) WHERE b.name = 'Albert Einstein' RETURN id(r) LIMIT 1
+    //     MATCH (a)-[r]->(b) WHERE b.name = 'Albert Einstein' AND a.name = 'xyz' RETURN id(r) LIMIT 1
+    //         in this case we should rather start querying for b
+    //         (if there is an index on 'name', OR if the number of rows is much smaller than the number of relationships),
+    //         using the post filter constraint, and then only query
     //         the system relationships table with id(B) IN (...)
 
     // todo variable length relationships: (a)-[r1:*..3]->(b)
