@@ -6,6 +6,7 @@
 #include <vector>
 #include <optional>
 #include <iostream>
+#include <sstream>
 
 template < typename > constexpr bool c_false = false;
 
@@ -18,16 +19,29 @@ struct QueryVars
   // So the order of calls to this method must match the query string order.
   std::string addVar(std::vector<int64_t> const & value)
   {
-    std::string varName{"?" + std::to_string(m_nextKey)};
     m_variables[m_nextKey] = value;
-    ++m_nextKey;
-    return varName;
+    return nextName();
   }
+  std::string addVar(std::vector<int64_t> && value)
+  {
+    m_variables[m_nextKey] = std::move(value);
+    return nextName();
+  }
+
   const std::map<int, std::vector<int64_t>> & vars() const { return m_variables; }
+  
 private:
   // key starts at 1
   std::map<int, std::vector<int64_t>> m_variables;
   int m_nextKey {1};
+  
+  std::string nextName()
+  {
+    std::ostringstream s;
+    s << "carray(?" << m_nextKey << ")";
+    ++m_nextKey;
+    return s.str();
+  }
 };
 
 enum class Comparison
@@ -87,7 +101,7 @@ struct Literal : public Expression
         // Note that using a bound variable with carray has not increased performance noticeably.
         if(!m_varName.has_value())
           m_varName = vars.addVar(arg);
-        os << "carray(" << *m_varName << ")";
+        os << *m_varName;
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");

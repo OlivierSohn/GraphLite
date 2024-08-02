@@ -132,7 +132,8 @@ struct GraphDB
   ID addRelationship(const std::string& type,
                      const ID& originEntity,
                      const ID& destinationEntity,
-                     const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
+                     const std::vector<std::pair<PropertyKeyName, std::string>>& propValues,
+                     bool verifyNodesExist=false);
   
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.

@@ -157,12 +157,6 @@ int main()
     runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
     runCypher("MATCH (e1)-[]->()-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
 
-    // Using bound variables for ids in SQL queries in not noticeably faster
-    // when we recompile the query each time.
-    // https://sqlite.org/forum/forumpost/0eecae1b74?t=h&unf
-    // https://www.sqlite.org/carray.html
-    // https://sqlpkg.org/all/ (to find the precompiled extension)
-
     // TODO support prepared statements to have faster graph creation
     // (we will have one prepared statement for creating the relationships, one for creating nodes).
 

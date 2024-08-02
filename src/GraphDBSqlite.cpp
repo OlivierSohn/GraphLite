@@ -288,19 +288,21 @@ ID GraphDB::addNode(const std::string& typeName,
 ID GraphDB::addRelationship(const std::string& typeName,
                             const ID& originEntity,
                             const ID& destinationEntity,
-                            const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
+                            const std::vector<std::pair<PropertyKeyName, std::string>>& propValues,
+                            bool verifyNodesExist)
 {
   const auto typeIdx = m_indexedRelationshipTypes.getIfExists(typeName);
   if(!typeIdx.has_value())
     throw std::logic_error("unknown relationship type: " + typeName);
 
   // Verify the origin & destination node ids exist
+  if(verifyNodesExist)
   {
     size_t countMatches{};
     size_t expectedCountMatches{1};
     {
       std::ostringstream s;
-      s << "SELECT " << m_idProperty << " from nodes WHERE " << m_idProperty << " in (";
+      s << "SELECT " << m_idProperty << " from nodes WHERE " << m_idProperty << " IN (";
       s << originEntity;
       if(originEntity != destinationEntity)
       {
@@ -1702,18 +1704,12 @@ void GraphDB::gatherPropertyValues(const Variable& var,
       s << propertyName;
     }
     s << " FROM " << label;
-    // TODO use bound param
-    s << " WHERE SYS__ID IN (";
-    bool first{true};
+    
+    std::vector<int64_t> vIdsSigned;
+    vIdsSigned.reserve(ids.size());
     for(const auto & id : ids)
-    {
-      if(first)
-        first = false;
-      else
-        s << ", ";
-      s << id;
-    }
-    s << ")";
+      vIdsSigned.push_back(strToInt64(id));
+    s << " WHERE SYS__ID IN " << sqlVars.addVar(std::move(vIdsSigned));
     if(!sqlFilter.empty())
       s << " AND " << sqlFilter;
   }
@@ -1779,34 +1775,80 @@ int GraphDB::sqlite3_exec(const std::string& queryStr,
   return res;
 }
 
+struct PreparedStatement{
+  PreparedStatement() = default;
+  PreparedStatement(PreparedStatement const &) = delete;
+  PreparedStatement(PreparedStatement&&) = delete;
+  PreparedStatement const & operator =(PreparedStatement const &) = delete;
+  PreparedStatement const & operator =(PreparedStatement &&) = delete;
+
+  int prepare(sqlite3* db, const std::string& queryStr)
+  {
+    auto res = sqlite3_prepare_v2(db, queryStr.c_str(), static_cast<int>(queryStr.size() + 1ull), &m_stmt, nullptr);
+    if(!res)
+      m_nCols = sqlite3_column_count(m_stmt);
+    return res;
+  }
+  
+  int bindVariables(const sql::QueryVars& sqlVars) const
+  {
+    for(const auto & [i, v] : sqlVars.vars())
+      if(auto res = sqlite3_carray_bind(m_stmt, i, const_cast<int64_t*>(v.data()), static_cast<int>(v.size()), CARRAY_INT64, SQLITE_STATIC))
+        return res;
+    return SQLITE_OK;
+  }
+
+  ~PreparedStatement(){
+    sqlite3_finalize(m_stmt);
+  }
+
+  int countColumns() const { return m_nCols; }
+
+  int step() const
+  {
+    return sqlite3_step(m_stmt);
+  }
+  const char* column_name(int i)
+  {
+    return sqlite3_column_name(m_stmt, i);
+  }
+  const unsigned char* column_text(int i)
+  {
+    return sqlite3_column_text(m_stmt, i);
+  }
+private:
+  int m_nCols;
+  sqlite3_stmt* m_stmt{};
+};
+
 int GraphDB::sqlite3_exec_notime(const std::string& queryStr,
                                  const sql::QueryVars& sqlVars,
                                  int (*callback)(void*,int,char**,char**),
                                  void * cbParam,
                                  const char **errmsg) const
 {
-  // equivalent to this, except for the error message part.
-  //return ::sqlite3_exec(m_db, queryStr.c_str(), callback, cbParam, errmsg);
   if(errmsg)
     errmsg = nullptr;
-  sqlite3_stmt* stmt{};
+  PreparedStatement stmt{};
   int res{};
-  if(res = sqlite3_prepare_v2(m_db, queryStr.c_str(), queryStr.size() + 1ull, &stmt, nullptr))
+  if(res = stmt.prepare(m_db, queryStr))
   {
     if(errmsg)
       *errmsg = sqlite3_errmsg(m_db);
     return res;
   }
-  const auto nCols = sqlite3_column_count(stmt);
+  
+  const auto nCols = stmt.countColumns();
+
+  if(res = stmt.bindVariables(sqlVars))
+    return res;
+
   std::vector<const char*> rowResults;
   std::vector<const char*> colNames;
   bool vecInitialized = false;
-  for(const auto & [i, v] : sqlVars.vars())
-    if(res = sqlite3_carray_bind(stmt, i, const_cast<int64_t*>(v.data()), static_cast<int>(v.size()), CARRAY_INT64, SQLITE_STATIC))
-      goto end;
-      
+
 nextRow:
-  res = sqlite3_step(stmt);
+  res = stmt.step();
   if(res == SQLITE_ROW)
   {
     if(callback)
@@ -1817,29 +1859,26 @@ nextRow:
         rowResults.resize(nCols);
         colNames.resize(nCols);
         for(int i=0; i<nCols; ++i)
-          colNames[i] = sqlite3_column_name(stmt, i);
+          colNames[i] = stmt.column_name(i);
       }
       for(int i=0; i<nCols; ++i)
-        rowResults[i] = reinterpret_cast<const char*>(sqlite3_column_text(stmt, i));
+        rowResults[i] = reinterpret_cast<const char*>(stmt.column_text(i));
       if(auto cbRes = callback(cbParam,
                                nCols,
                                const_cast<char**>(rowResults.data()),
                                const_cast<char**>(colNames.data())))
       {
-        res = SQLITE_ABORT;
-        goto end;
+        return SQLITE_ABORT;
       }
     }
     goto nextRow;
   }
   else if(res == SQLITE_DONE)
-    res = SQLITE_OK;
+    return SQLITE_OK;
   else
   {
     if(errmsg)
       *errmsg = sqlite3_errmsg(m_db);
   }
-end:
-  sqlite3_finalize(stmt);
   return res;
 }

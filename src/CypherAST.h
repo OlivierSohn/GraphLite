@@ -9,9 +9,9 @@
 #include <set>
 #include <map>
 #include <any>
-#include <charconv>
 
 #include "SqlAST.h"
+#include "Logs.h"
 
 namespace openCypher
 {
@@ -126,21 +126,7 @@ struct Literal
         for(const std::string & str : arg)
         {
           // For now we only support lists of integers (for integer ids).
-          int64_t result{};
-          const auto last = str.data() + str.size();
-          auto [ptr, ec] = std::from_chars(str.data(), last, result);
-          
-          if (ec == std::errc())
-          {
-            if(ptr == last)
-              converted.push_back(result);
-            else
-              throw std::logic_error("Found invalid int64 string:'" + str + "'");
-          }
-          else if (ec == std::errc::invalid_argument)
-            throw std::logic_error("Not an int64 string:'" + str + "'");
-          else if (ec == std::errc::result_out_of_range)
-            throw std::logic_error("Number is larger than int64 :'" + str + "'");
+          converted.push_back(strToInt64(str));
         }
         return std::make_unique<sql::Literal>(converted);
       }

@@ -2,6 +2,7 @@
 
 #include <ostream>
 #include <string>
+#include <charconv>
 
 // RAII-object to indent logs in a scope.
 struct LogIndentScope
@@ -35,3 +36,23 @@ std::vector<std::string> splitOn(const std::string& match, std::string const & r
 void printChart(std::ostream&,
                 std::vector<std::string> const & columnNames,
                 std::vector<std::vector<std::string>> const & values);
+
+inline int64_t strToInt64(std::string const & str)
+{
+  int64_t result{};
+  const auto last = str.data() + str.size();
+  auto [ptr, ec] = std::from_chars(str.data(), last, result);
+  
+  if (ec == std::errc())
+  {
+    if(ptr == last)
+      return result;
+    else
+      throw std::logic_error("Found invalid int64 string:'" + str + "'");
+  }
+  else if (ec == std::errc::invalid_argument)
+    throw std::logic_error("Not an int64 string:'" + str + "'");
+  else if (ec == std::errc::result_out_of_range)
+    throw std::logic_error("Number is larger than int64 :'" + str + "'");
+}
+
