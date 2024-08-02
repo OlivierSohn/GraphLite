@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <random>
+#include <filesystem>
 
 #include "GraphDBSqlite.h"
 #include "CypherQuery.h"
@@ -15,7 +16,7 @@ struct SQLQueryStat{
 
 struct GraphWithStats
 {
-  GraphWithStats();
+  GraphWithStats(const std::optional<std::filesystem::path>& dbPath = std::nullopt);
   
   GraphDB& getDB() { return *m_graph; }
 
@@ -30,7 +31,7 @@ private:
 
 };
 
-GraphWithStats::GraphWithStats()
+GraphWithStats::GraphWithStats(const std::optional<std::filesystem::path>& dbPath)
 {
   auto onSQLQuery = [&](const std::string& req)
   {
@@ -75,7 +76,7 @@ GraphWithStats::GraphWithStats()
     return 0;
   };
 
-  m_graph = std::make_unique<GraphDB>(onSQLQuery, onSQLQueryDuration, onDBDiagnosticContent);
+  m_graph = std::make_unique<GraphDB>(onSQLQuery, onSQLQueryDuration, onDBDiagnosticContent, dbPath);
 }
 
 
@@ -1129,58 +1130,63 @@ TEST(Test, LongerPathPattern)
   EXPECT_THROW(handler.run("MATCH (a)-[]-(b)<-[]-(c) return a.age, b.age, c.age"), std::exception);
 }
 
-// disabling perf test
-TEST(Test, DISABLED_Perfs1)
+
+TEST(Test, Limit)
 {
   LogIndentScope _{};
   
   auto dbWrapper = std::make_unique<GraphWithStats>();
-  dbWrapper->m_printSQLRequests = false;
-
+  
   auto & db = dbWrapper->getDB();
+  /*
+   -----
+   v     |
+   p1 -> p2 -> p3 -> p4
+   ^                 |
+   -----------------
+   */
   const auto p_age = mkProperty("age");
   const auto p_since = mkProperty("since");
   db.addType("Person", true, {p_age});
   db.addType("Knows", false, {p_since});
-  db.addType("WorksWith", false, {p_since});
   
-  // 5 ms per iteration without a transaction
-  // 0.1 ms per iteration with a transaction
-  // Ideally we should have one transaction per ~10000 inserts.
-  size_t countRels{};
-  for(int i=0; i<50; ++i)
-  {
-    std::cout << i << ".";
-    db.beginTransaction();
-    for(size_t i=0; i<2000; ++i)
-    {
-      const std::string entityIDSource = db.addNode("Person", {{p_age, "5"}});
-      const std::string entityIDDestination = db.addNode("Person", {{p_age, "10"}});
-      const std::string relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {{p_since, "1234"}});
-      const std::string relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, {{p_since, "123444"}});
-      countRels += 2;
-    }
-    db.endTransaction();
-  }
-  std::cout << std::endl;
-  std::cout << countRels << " relationships" << std::endl;
-
+  std::string p1 = db.addNode("Person", {{p_age, "1"}});
+  std::string p2 = db.addNode("Person", {{p_age, "2"}});
+  std::string p3 = db.addNode("Person", {{p_age, "3"}});
+  std::string p4 = db.addNode("Person", {{p_age, "4"}});
+  std::string r12 = db.addRelationship("Knows", p1, p2, {{p_since, "12"}});
+  std::string r23 = db.addRelationship("Knows", p2, p3, {{p_since, "23"}});
+  std::string r32 = db.addRelationship("Knows", p3, p2, {{p_since, "32"}});
+  std::string r34 = db.addRelationship("Knows", p3, p4, {{p_since, "34"}});
+  std::string r41 = db.addRelationship("Knows", p4, p1, {{p_since, "41"}});
+  
   QueryResultsHandler handler(*dbWrapper);
-    
-  dbWrapper->m_printSQLRequestsDuration = true;
   dbWrapper->m_printSQLRequests = true;
-  handler.run("MATCH (a)-[r]->(b) WHERE a.age < 107 return a.age, b.age, r.since");
   
-  std::cout << handler.countRows() << " rows fetched in ";
-  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_cypherQueryDuration).count() << " us using ";
-  std::cout << handler.countSQLQueries() << " SQL queries that ran in ";
-  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlQueriesExecutionDuration).count() << " us" << std::endl;
-  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlRelCbDuration).count() << " us" << std::endl;
-  std::cout << std::chrono::duration_cast<std::chrono::microseconds>(handler.m_sqlPropCbDuration).count() << " us" << std::endl;
+  handler.run("MATCH (a)-[]->(b)-[]->(c) return a.age, b.age, c.age");
+  EXPECT_EQ(6, handler.rows().size());
+  handler.run("MATCH (a)-[]->(b)-[]->(c) return a.age, b.age, c.age LIMIT 10");
+  EXPECT_EQ(6, handler.rows().size());
+  handler.run("MATCH (a)-[]->(b)-[]->(c) return a.age, b.age, c.age LIMIT 6");
+  EXPECT_EQ(6, handler.rows().size());
+  handler.run("MATCH (a)-[]->(b)-[]->(c) return a.age, b.age, c.age LIMIT 5");
+  EXPECT_EQ(5, handler.rows().size());
+  handler.run("MATCH (a)-[]->(b)-[]->(c) return a.age, b.age, c.age LIMIT 0");
+  EXPECT_EQ(0, handler.rows().size());
+
+  handler.run("MATCH (a) return a.age");
+  EXPECT_EQ(4, handler.rows().size());
+  handler.run("MATCH (a) return a.age LIMIT 5");
+  EXPECT_EQ(4, handler.rows().size());
+  handler.run("MATCH (a) return a.age LIMIT 2");
+  EXPECT_EQ(2, handler.rows().size());
+  handler.run("MATCH (a) return a.age LIMIT 0");
+  EXPECT_EQ(0, handler.rows().size());
 }
 
+
+
 /*
- // TODO: redo measurements once we use bound variables in SQL queries for ids.
  ----------------------------------------------------
  Simplest query:
 
@@ -1648,106 +1654,108 @@ TEST(Test, Perfs2)
   Timer timer{std::cout};
 
   LogIndentScope _{};
-  
-  auto dbWrapper = std::make_unique<GraphWithStats>();
-  dbWrapper->m_printSQLRequests = false;
-  
-  auto & db = dbWrapper->getDB();
-  
-  timer.endStep("System tables creation");
-  
-  const auto p_age = mkProperty("age");
-  const auto p_since = mkProperty("since");
-  db.addType("Person", true, {p_age});
-  db.addType("Knows", false, {p_since});
-  db.addType("WorksWith", false, {p_since});
 
-  timer.endStep("Non-system labeled entity/relationship property tables creation");
+  const size_t countNodes {64000};
+
+  auto dbWrapper = std::make_unique<GraphWithStats>("test.Perf2." + std::to_string(countNodes) + ".sqlite3db");
+  //dbWrapper->m_printSQLRequests = true;
 
   std::mt19937 gen;
-  
-  // TODO make a parametrized tests.
-  // See results in comment above this test.
-  const size_t countNodes {6400000};
-  std::vector<ID> nodeIds;
-  nodeIds.reserve(10000);
+  std::uniform_int_distribution<size_t> distrNodes(0, countNodes - 1ull);
+  // pick "root" node at random
+  const auto rootNodeIdx = distrNodes(gen);
 
-  const auto maxAge = 8000;
-  // 5 ms per iteration without a transaction
-  // 0.1 ms per iteration with a transaction
-  // Ideally we should have one transaction per ~10000 inserts.
-  for(int i=0;; ++i)
+  auto & db = dbWrapper->getDB();
+  if(!db.typesAndProperties().empty())
+    timer.endStep("Read existing DB file");
+  else
   {
-    std::cout << i << "." << std::flush;
-    db.beginTransaction();
-    for(size_t i=0; i<maxAge; ++i)
+    const auto p_age = mkProperty("age");
+    const auto p_since = mkProperty("since");
+    db.addType("Person", true, {p_age});
+    db.addType("Knows", false, {p_since});
+    db.addType("WorksWith", false, {p_since});
+    
+    timer.endStep("Non-system labeled entity/relationship property tables creation");
+
+    // TODO make a parametrized tests.
+    // See results in comment above this test.
+    std::vector<ID> nodeIds;
+    nodeIds.reserve(10000);
+    
+    const auto maxAge = 8000;
+    // 5 ms per iteration without a transaction
+    // 0.1 ms per iteration with a transaction
+    // Ideally we should have one transaction per ~10000 inserts.
+    for(int i=0;; ++i)
     {
-      nodeIds.push_back(db.addNode("Person", {{p_age, std::to_string(i)}}));
+      std::cout << i << "." << std::flush;
+      db.beginTransaction();
+      for(size_t i=0; i<maxAge; ++i)
+      {
+        nodeIds.push_back(db.addNode("Person", {{p_age, std::to_string(i)}}));
+        if(nodeIds.size() == countNodes)
+          break;
+      }
+      db.endTransaction();
       if(nodeIds.size() == countNodes)
         break;
     }
-    db.endTransaction();
-    if(nodeIds.size() == countNodes)
-      break;
-  }
-  std::cout << std::endl;
-  timer.endStep(std::to_string(nodeIds.size()) + " nodes creation");
+    std::cout << std::endl;
+    timer.endStep(std::to_string(nodeIds.size()) + " nodes creation");
+    
+    std::vector<std::pair<size_t, size_t>> rels;
+    rels.reserve(nodeIds.size());
 
-  std::vector<std::pair<size_t, size_t>> rels;
-  rels.reserve(nodeIds.size());
-
-  std::uniform_int_distribution<size_t> distrNodes(0, nodeIds.size() - 1ull);
-  // pick "root" node at random
-  const auto rootNodeIdx = distrNodes(gen);
-  
-  std::vector<size_t> curNodeIDx;
-  std::vector<size_t> nextNodeIDx;
-  curNodeIDx.push_back(rootNodeIdx);
-
-  // start with 2 neighbours per node and double at each iteration.
-  for(int countNeighbours = 1;; countNeighbours++)
-  {
-    const size_t countRelsToAdd = curNodeIDx.size() * countNeighbours;
-    if(countRelsToAdd > nodeIds.size())
-      break;
-    std::cout << "will specify " << countRelsToAdd << " rels" << std::endl;
-    for(const auto nodeIdx : curNodeIDx)
+    std::vector<size_t> curNodeIDx;
+    std::vector<size_t> nextNodeIDx;
+    curNodeIDx.push_back(rootNodeIdx);
+    
+    // start with 2 neighbours per node and double at each iteration.
+    for(int countNeighbours = 1;; countNeighbours++)
     {
-      for(int i=0; i<countNeighbours; ++i)
+      const size_t countRelsToAdd = curNodeIDx.size() * countNeighbours;
+      if(countRelsToAdd > nodeIds.size())
+        break;
+      std::cout << "will specify " << countRelsToAdd << " rels" << std::endl;
+      for(const auto nodeIdx : curNodeIDx)
       {
-        // pick neighbours at random
-        const auto neighbourIdx = distrNodes(gen);
-        nextNodeIDx.push_back(neighbourIdx);
-        rels.emplace_back(nodeIdx, neighbourIdx);
+        for(int i=0; i<countNeighbours; ++i)
+        {
+          // pick neighbours at random
+          const auto neighbourIdx = distrNodes(gen);
+          nextNodeIDx.push_back(neighbourIdx);
+          rels.emplace_back(nodeIdx, neighbourIdx);
+        }
       }
+      curNodeIDx.clear();
+      nextNodeIDx.swap(curNodeIDx);
     }
-    curNodeIDx.clear();
-    nextNodeIDx.swap(curNodeIDx);
-  }
-  std::cout << "Will create " << rels.size() << " relationships." << std::endl;
-
-  size_t relIdx{};
-  for(int i=0;; ++i)
-  {
-    std::cout << i << "." << std::flush;
-    db.beginTransaction();
-    for(size_t i=0; i<4000; ++i)
+    std::cout << "Will create " << rels.size() << " relationships." << std::endl;
+    
+    size_t relIdx{};
+    for(int i=0;; ++i)
     {
+      std::cout << i << "." << std::flush;
+      db.beginTransaction();
+      for(size_t i=0; i<4000; ++i)
+      {
+        if(relIdx == rels.size())
+          break;
+        db.addRelationship("Knows", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(i)}});
+        ++relIdx;
+        if(relIdx == rels.size())
+          break;
+        db.addRelationship("WorksWith", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(2 * i)}});
+        ++relIdx;
+      }
+      db.endTransaction();
       if(relIdx == rels.size())
         break;
-      db.addRelationship("Knows", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(i)}});
-      ++relIdx;
-      if(relIdx == rels.size())
-        break;
-      db.addRelationship("WorksWith", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(2 * i)}});
-      ++relIdx;
     }
-    db.endTransaction();
-    if(relIdx == rels.size())
-      break;
+    std::cout << std::endl;
+    timer.endStep(std::to_string(relIdx) + " relationships creation");
   }
-  std::cout << std::endl;
-  timer.endStep(std::to_string(relIdx) + " relationships creation");
 
   QueryResultsHandler handler(*dbWrapper);
   
@@ -1756,7 +1764,7 @@ TEST(Test, Perfs2)
   //handler.m_printCypherAST = true;
 
   std::unordered_set<std::string> nodeVisisted;
-  nodeVisisted.reserve(nodeIds.size());
+  nodeVisisted.reserve(countNodes);
   
   struct Stats{
     size_t countStartNodes{};
@@ -1774,7 +1782,9 @@ TEST(Test, Perfs2)
   };
   std::vector<Stats> stats;
 
-  std::vector<std::string> expandFronteer{nodeIds[rootNodeIdx]};
+  // Here we assume that the id is 1 for the first node, 2 for the second, etc...
+  // This is how sqlite auto increment "integer primary key" column works.
+  std::vector<std::string> expandFronteer{/*nodeIds[rootNodeIdx]*/ std::to_string(1 + rootNodeIdx)};
   for(;;)
   {
     if(expandFronteer.empty())

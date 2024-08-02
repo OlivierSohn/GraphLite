@@ -109,7 +109,9 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   const auto & app = mpp.anonymousPatternPart;
   
   const std::map<Variable, std::vector<ReturnClauseTerm>> props =
-  extractProperties(spq.returnClause.naoExps);
+  extractProperties(spq.returnClause.items.naoExps);
+  
+  const auto limit = spq.returnClause.limit;
 
   auto mkReturnedProperties = [&](const Variable& var) -> std::vector<ReturnClauseTerm>
   {
@@ -194,6 +196,7 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
                                          asStringVec(relLabels),
                                          asStringVec(dualNodeLabels),
                                          whereExprsByVarsAndproperties,
+                                         limit,
                                          f);
     return;
   }
@@ -241,6 +244,7 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
                    variables,
                    pathPatternElements,
                    whereExprsByVarsAndproperties,
+                   limit,
                    f);
     return;
   }
@@ -268,7 +272,7 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
   const auto& variable = singleNodeVariable ? *nodePattern.mayVariable : *app.patternElementChains[0].relPattern.mayVariable;
   const auto& labels = singleNodeVariable ? nodePattern.labels : app.patternElementChains[0].relPattern.labels;
 
-  if(spq.returnClause.naoExps.empty())
+  if(spq.returnClause.items.naoExps.empty())
     throw std::logic_error("Not Implemented (Expected some non arithmetic expression)");
   
   const auto itProps = props.find(variable);
@@ -295,6 +299,7 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
                                         properties,
                                         labelsStr,
                                         &filter,
+                                        limit,
                                         f);
 }
 } // NS

@@ -12,6 +12,7 @@
 #include "SQLPreparedStatement.h"
 
 #include <string>
+#include <filesystem>
 #include <chrono>
 #include <unordered_map>
 #include <unordered_set>
@@ -93,6 +94,7 @@ struct PathPatternElement
 
 struct GraphDB
 {
+  using Limit = openCypher::Limit;
   using Variable = openCypher::Variable;
   using Expression = openCypher::Expression;
   using SymbolicName = openCypher::SymbolicName;
@@ -114,7 +116,16 @@ struct GraphDB
   using FuncOnSQLQueryDuration = std::function<void(const std::chrono::steady_clock::duration)>;
   using FuncOnDBDiagnosticContent = std::function<void(int argc, char **argv, char **column)>;
   
-  GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration& fOnSQLQueryDuration, const FuncOnDBDiagnosticContent& fOnDiagnostic);
+  static constexpr const char* c_defaultDBPath{"default.sqlite3db"};
+
+  // If |dbPath| has no value or points to a non-existing DB file,
+  //   we create (overwrite) the DB at the default location c_defaultDBPath and create system tables in it.
+  // Else (i.e when |dbPath| has a value and points to an existing DB file),
+  //   we preserve the existing DB file and infer the graph schema from the tables of the existing DB file.
+  GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
+          const FuncOnSQLQueryDuration& fOnSQLQueryDuration,
+          const FuncOnDBDiagnosticContent& fOnDiagnostic,
+          const std::optional<std::filesystem::path>& dbPath = std::nullopt);
   ~GraphDB();
   
   // Creates a sql table.
@@ -146,6 +157,7 @@ struct GraphDB
                                           const std::vector<ReturnClauseTerm>& propertyNames,
                                           const std::vector<std::string>& labels,
                                           const std::vector<const Expression*>* filter,
+                                          const std::optional<Limit>& limit,
                                           FuncResults& f);
   
   void forEachNodeAndRelatedRelationship(const TraversalDirection,
@@ -156,6 +168,7 @@ struct GraphDB
                                          const std::vector<std::string>& relLabelsStr,
                                          const std::vector<std::string>& dualNodeLabelsStr,
                                          const ExpressionsByVarAndProperties& allFilters,
+                                         const std::optional<Limit>& limit,
                                          FuncResults& f);
   
   struct VariableInfo {
@@ -166,6 +179,7 @@ struct GraphDB
                    const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
                    const std::vector<PathPatternElement>& pathPattern,
                    const ExpressionsByVarAndProperties& allFilters,
+                   const std::optional<Limit>& limit,
                    FuncResults& f);
   
   // Time to run the SQL queries.
@@ -176,6 +190,9 @@ struct GraphDB
   mutable std::chrono::steady_clock::duration m_totalPropertyTablesCbDuration{};
   
   void print();
+  
+  const auto& typesAndProperties() const { return m_properties; }
+
 private:
   PropertyKeyName m_idProperty{openCypher::mkProperty("SYS__ID")};
   

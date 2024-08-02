@@ -13,6 +13,8 @@
 #include "SqlAST.h"
 #include "Logs.h"
 
+// All types defined here my need to be refactored later as more of the openCypher grammar is supported.
+
 namespace openCypher
 {
 using Comparison = sql::Comparison;
@@ -585,11 +587,17 @@ struct ListOperatorExpression{};
 
 struct ProjectionItems
 {
-  // simplified wrt grammar... might need to be refactored later.
   std::vector<NonArithmeticOperatorExpression> naoExps;
 };
-// simplified wrt grammar... might need to be refactored later.
-using ProjectionBody = ProjectionItems;
+
+struct Limit {
+  size_t maxCountRows;
+};
+struct ProjectionBody{
+  std::optional<Limit> limit;
+  ProjectionItems items;
+};
+
 using Return = ProjectionBody;
 struct SinglePartQuery{
   std::optional<ReadingClause> mayReadingClause;

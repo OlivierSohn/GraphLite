@@ -4,7 +4,6 @@
 
 
 #include <iostream>
-#include <filesystem>
 #include <sstream>
 #include <numeric>
 
@@ -37,7 +36,10 @@ struct hash<IDAndType>
 };
 }
 
-GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration& fOnSQLQueryDuration, const FuncOnDBDiagnosticContent& fOnDiagnostic)
+GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
+                 const FuncOnSQLQueryDuration& fOnSQLQueryDuration,
+                 const FuncOnDBDiagnosticContent& fOnDiagnostic,
+                 const std::optional<std::filesystem::path>& dbPath)
 : m_fOnSQLQuery(fOnSQLQuery)
 , m_fOnSQLQueryDuration(fOnSQLQueryDuration)
 , m_fOnDiagnostic(fOnDiagnostic)
@@ -46,12 +48,11 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration
   
   const bool useIndices = true;
   
-  const bool overwrite = true;
-  const auto dbFile = std::filesystem::path("test.sqlite3db");
-  if(overwrite)
-  {
+  const bool reinitDB = !dbPath.has_value() || !std::filesystem::exists(*dbPath);
+  const auto dbFile = dbPath.value_or(std::filesystem::path{c_defaultDBPath});
+
+  if(reinitDB)
     std::filesystem::remove(dbFile);
-  }
 
   if(auto res = sqlite3_open(dbFile.string().c_str(), &m_db))
     throw std::logic_error(sqlite3_errstr(res));
@@ -65,93 +66,137 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery, const FuncOnSQLQueryDuration
   if(auto res = sqlite3_carray_init(m_db, &msg, nullptr))
     throw std::logic_error(msg);
 
-  // TODO do not overwrite tables, read types from namedTypes.
-  
+  if(reinitDB)
   {
-    LogIndentScope _ = logScope(std::cout, "Creating Nodes System table...");
-    // This table avoids having to lookup into all nodes tables when looking for a specifiic entity.
-    std::string typeName = "nodes";
     {
-      const std::string req = "DROP TABLE " + typeName + ";";
-      // ignore error
-      auto res = sqlite3_exec(req, 0, 0, 0);
+      LogIndentScope _ = logScope(std::cout, "Creating Nodes System table...");
+      // This table avoids having to lookup into all nodes tables when looking for an entity
+      // for which we don't have type information.
+      std::string tableName = "nodes";
+      {
+        const std::string req = "DROP TABLE " + tableName + ";";
+        // ignore error
+        auto res = sqlite3_exec(req, 0, 0, 0);
+      }
+      {
+        std::ostringstream s;
+        s << "CREATE TABLE " << tableName << " (";
+        {
+          s << m_idProperty << " INTEGER PRIMARY KEY, ";
+          s << "NodeType INTEGER";
+        }
+        s << ");";
+        if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
+          throw std::logic_error(sqlite3_errstr(res));
+      }
+      if(useIndices)
+      {
+        const std::string req = "CREATE INDEX NodeTypeIndex ON " + tableName + "(NodeType);";
+        if(auto res = sqlite3_exec(req, 0, 0, 0))
+          throw std::logic_error(sqlite3_errstr(res));
+      }
     }
     {
-      std::ostringstream s;
-      s << "CREATE TABLE " << typeName << " (";
+      LogIndentScope _ = logScope(std::cout, "Creating Relationships System table...");
+      std::string tableName = "relationships";
       {
-        s << m_idProperty << " INTEGER PRIMARY KEY, ";
-        s << "NodeType INTEGER";
+        const std::string req = "DROP TABLE " + tableName + ";";
+        // ignore error
+        auto res = sqlite3_exec(req, 0, 0, 0);
+      }
+      {
+        std::ostringstream s;
+        s << "CREATE TABLE " << tableName << " (";
+        {
+          s << m_idProperty << " INTEGER PRIMARY KEY, ";
+          s << "RelationshipType INTEGER, ";
+          s << "OriginID INTEGER, ";
+          s << "DestinationID INTEGER";
+        }
+        s << ");";
+        if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
+          throw std::logic_error(sqlite3_errstr(res));
+      }
+      if(useIndices)
+      {
+        const std::string req = "CREATE INDEX RelationshipTypeIndex ON " + tableName + "(RelationshipType);";
+        if(auto res = sqlite3_exec(req, 0, 0, 0))
+          throw std::logic_error(sqlite3_errstr(res));
+      }
+      if(useIndices)
+      {
+        const std::string req = "CREATE INDEX originIDIndex ON " + tableName + "(OriginID);";
+        if(auto res = sqlite3_exec(req, 0, 0, 0))
+          throw std::logic_error(sqlite3_errstr(res));
+      }
+      if(useIndices)
+      {
+        const std::string req = "CREATE INDEX destinationIDIndex ON " + tableName + "(DestinationID);";
+        if(auto res = sqlite3_exec(req, 0, 0, 0))
+          throw std::logic_error(sqlite3_errstr(res));
+      }
+    }
+    {
+      LogIndentScope _ = logScope(std::cout, "Creating Types System table...");
+      std::string tableName = "namedTypes";
+      {
+        const std::string req = "DROP TABLE " + tableName + ";";
+        // ignore error
+        auto res = sqlite3_exec(req, 0, 0, 0);
+      }
+      std::ostringstream s;
+      s << "CREATE TABLE " << tableName << " (";
+      {
+        s << "TypeIdx INTEGER PRIMARY KEY, ";
+        s << "Kind INTEGER, ";
+        s << "NamedType TEXT";
       }
       s << ");";
       if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
-    if(useIndices)
-    {
-      const std::string req = "CREATE INDEX NodeTypeIndex ON " + typeName + "(NodeType);";
-      if(auto res = sqlite3_exec(req, 0, 0, 0))
-        throw std::logic_error(sqlite3_errstr(res));
-    }
   }
+  else
   {
-    LogIndentScope _ = logScope(std::cout, "Creating Relationships System table...");
-    std::string typeName = "relationships";
+    // read types from namedTypes.
+    // read property names from property tables
+    
+    const char* msg{};
+    if(auto res = sqlite3_exec("SELECT NamedType, Kind, TypeIdx FROM namedTypes;", [](void *p_This, int argc, char **argv, char **column) {
+      auto & This = *static_cast<GraphDB*>(p_This);
+      size_t typeIdx = atoi(argv[2]);
+      const std::string kind = std::string{argv[1]};
+      const bool isNode = kind == std::string{"E"};
+      const bool isRela = kind == std::string{"R"};
+      if(!isNode && !isRela)
+        throw std::logic_error("Expected E or R, got:" + kind);
+      if(isNode)
+        This.m_indexedNodeTypes.add(typeIdx, argv[0]);
+      else
+        This.m_indexedRelationshipTypes.add(typeIdx, argv[0]);
+      return 0;
+    }, this, &msg))
+      throw std::logic_error(std::string{msg});
+
+    std::vector<std::string> typeNames;
+    for(const auto & [typeName, _] : m_indexedNodeTypes.getTypeToIndex())
+      typeNames.push_back(typeName);
+    for(const auto & [typeName, _] : m_indexedRelationshipTypes.getTypeToIndex())
+      typeNames.push_back(typeName);
+    for(const auto & typeName : typeNames)
     {
-      const std::string req = "DROP TABLE " + typeName + ";";
-      // ignore error
-      auto res = sqlite3_exec(req, 0, 0, 0);
-    }
-    {
+      m_properties[typeName].insert(m_idProperty);
+      std::set<PropertyKeyName> & set = m_properties[typeName];
+
       std::ostringstream s;
-      s << "CREATE TABLE " << typeName << " (";
-      {
-        s << m_idProperty << " INTEGER PRIMARY KEY, ";
-        s << "RelationshipType INTEGER, ";
-        s << "OriginID INTEGER, ";
-        s << "DestinationID INTEGER";
-      }
-      s << ");";
-      if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
+      s << "PRAGMA table_info('" << typeName << "')";
+      if(auto res = sqlite3_exec(s.str(), [](void *p_Set, int argc, char **argv, char **column) {
+        auto & set = *static_cast<std::set<PropertyKeyName>*>(p_Set);
+        set.insert(openCypher::mkProperty(argv[1]));
+        return 0;
+      }, &set, 0))
         throw std::logic_error(sqlite3_errstr(res));
     }
-    if(useIndices)
-    {
-      const std::string req = "CREATE INDEX RelationshipTypeIndex ON " + typeName + "(RelationshipType);";
-      if(auto res = sqlite3_exec(req, 0, 0, 0))
-        throw std::logic_error(sqlite3_errstr(res));
-    }
-    if(useIndices)
-    {
-      const std::string req = "CREATE INDEX originIDIndex ON " + typeName + "(OriginID);";
-      if(auto res = sqlite3_exec(req, 0, 0, 0))
-        throw std::logic_error(sqlite3_errstr(res));
-    }
-    if(useIndices)
-    {
-      const std::string req = "CREATE INDEX destinationIDIndex ON " + typeName + "(DestinationID);";
-      if(auto res = sqlite3_exec(req, 0, 0, 0))
-        throw std::logic_error(sqlite3_errstr(res));
-    }
-  }
-  {
-    LogIndentScope _ = logScope(std::cout, "Creating Types System table...");
-    std::string typeName = "namedTypes";
-    {
-      const std::string req = "DROP TABLE " + typeName + ";";
-      // ignore error
-      auto res = sqlite3_exec(req, 0, 0, 0);
-    }
-    std::ostringstream s;
-    s << "CREATE TABLE " << typeName << " (";
-    {
-      s << "TypeIdx INTEGER PRIMARY KEY, ";
-      s << "Kind INTEGER, ";
-      s << "NamedType TEXT";
-    }
-    s << ");";
-    if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
-      throw std::logic_error(sqlite3_errstr(res));
   }
 }
 
@@ -162,12 +207,16 @@ GraphDB::~GraphDB()
 
 void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<PropertyKeyName> &properties)
 {
+  // We no longer delete
+  /*
   {
     const std::string req = "DROP TABLE " + typeName + ";";
     // ignore error
     auto res = sqlite3_exec(req, 0, 0, 0);
   }
+   */
   {
+    const char*msg{};
     std::ostringstream s;
     s << "CREATE TABLE " << typeName << " (";
     {
@@ -176,8 +225,8 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
         s << ", " << property << " int DEFAULT NULL";
     }
     s << ");";
-    if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
-      throw std::logic_error(sqlite3_errstr(res));
+    if(auto res = sqlite3_exec(s.str(), 0, 0, &msg))
+      throw std::logic_error("CREATE TABLE: " + std::string{msg});
   }
   // record type
   {
@@ -566,6 +615,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
                           const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
                           const std::vector<PathPatternElement>& pathPattern,
                           const ExpressionsByVarAndProperties& allFilters,
+                          const std::optional<Limit>& limit,
                           FuncResults& f)
 {
   // Todo : How to efficiently implement TraversalDirection::Any?
@@ -952,8 +1002,11 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
   for(size_t i{}; i<countDistinctVariables; ++i)
     orderedVariables.push_back(varIdxToVar[i]);
 
+  size_t countReturnedRows{};
   for(size_t row{}; row<countRows; ++row)
   {
+    if(limit.has_value() && countReturnedRows >= limit->maxCountRows)
+      break;
     for(size_t i{}; i<countDistinctVariables; ++i)
     {
       if(lookupProperties[i])
@@ -978,6 +1031,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
       orderedVariables,
       vecColumnNames,
       vecValues);
+    ++countReturnedRows;
   nextRow:;
   }
 }
@@ -991,6 +1045,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
                                                 const std::vector<std::string>& relLabelsStr,
                                                 const std::vector<std::string>& dualNodeLabelsStr,
                                                 const ExpressionsByVarAndProperties& allFilters,
+                                                const std::optional<Limit>& limit,
                                                 FuncResults&f)
 {
   if(traversalDirection == TraversalDirection::Any)
@@ -999,7 +1054,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
     for(const auto td : {TraversalDirection::Forward, TraversalDirection::Backward})
       forEachNodeAndRelatedRelationship(td, nodeVar, relVar, dualNodeVar,
                                         nodeLabelsStr, relLabelsStr, dualNodeLabelsStr,
-                                        allFilters, f);
+                                        allFilters, limit, f);
     return;
   }
 
@@ -1360,8 +1415,11 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
   orderedVariables.push_back(relVar ? relVar->var : Variable{});
   orderedVariables.push_back(dualNodeVar ? dualNodeVar->var : Variable{});
 
+  size_t countReturnedRows{};
   for(const auto & candidateRow : candidateRows)
   {
+    if(limit.has_value() && countReturnedRows >= limit->maxCountRows)
+      break;
     if(lookupNodesProperties)
     {
       if(nodeOnlyReturnsId)
@@ -1404,6 +1462,7 @@ void GraphDB::forEachNodeAndRelatedRelationship(const TraversalDirection travers
       orderedVariables,
       vecColumnNames,
       vecValues);
+    ++countReturnedRows;
   }
 }
 
@@ -1412,6 +1471,7 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
                                                  const std::vector<ReturnClauseTerm>& returnClauseTerms,
                                                  const std::vector<std::string>& inputLabels,
                                                  const std::vector<const Expression*>* filter,
+                                                 const std::optional<Limit>& limit,
                                                  FuncResults& f)
 {
   sql::QueryVars sqlVars;
@@ -1485,9 +1545,11 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
       s << " WHERE " << sqlFilter;
   }
 
-  const std::string req = s.str();
+  std::string req = s.str();
   if(!req.empty())
   {
+    if(limit.has_value())
+      req += " LIMIT " + std::to_string(limit->maxCountRows);
     const char*msg{};
     if(auto res = sqlite3_exec(req, [](void *p_results, int argc, char **argv, char **column) {
       auto & results = *static_cast<Results*>(p_results);

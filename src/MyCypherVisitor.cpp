@@ -239,15 +239,19 @@ std::any MyCypherVisitor::visitOC_Return(CypherParser::OC_ReturnContext *context
 
 std::any MyCypherVisitor::visitOC_ProjectionBody(CypherParser::OC_ProjectionBodyContext *context) {
   auto _ = scope("ProjectionBody");
+  ProjectionBody body;
   if(auto * projItems = context->DISTINCT())
   {
     m_errors.push_back("todo: support DISTINCT");
     return {};
   }
-  if(auto * projItems = context->oC_Limit())
+  if(auto * p = context->oC_Limit())
   {
-    m_errors.push_back("todo: support LIMIT");
-    return {};
+    auto limit = p->accept(this);
+    if(limit.type() == typeid(Limit))
+      body.limit = std::move(std::any_cast<Limit>(limit));
+    else
+      m_errors.push_back("ProjectionBody: expected LIMIT");
   }
   if(auto * projItems = context->oC_Skip())
   {
@@ -260,8 +264,16 @@ std::any MyCypherVisitor::visitOC_ProjectionBody(CypherParser::OC_ProjectionBody
     return {};
   }
   if(auto * projItems = context->oC_ProjectionItems())
-    return projItems->accept(this);
-  return {};
+  {
+    auto res = projItems->accept(this);
+    if(res.type() == typeid(ProjectionItems))
+      body.items = std::move(std::any_cast<ProjectionItems>(res));
+    else
+      m_errors.push_back("ProjectionBody: expected ProjectionItems");
+  }
+  else
+    m_errors.push_back("ProjectionBody: expected oC_ProjectionItems()");
+  return body;
 }
 
 std::any MyCypherVisitor::visitOC_ProjectionItems(CypherParser::OC_ProjectionItemsContext *context) {
@@ -298,7 +310,29 @@ std::any MyCypherVisitor::visitOC_Order(CypherParser::OC_OrderContext *context) 
 
 std::any MyCypherVisitor::visitOC_Skip(CypherParser::OC_SkipContext *context) { return defaultVisit("Skip", __LINE__, context); }
 
-std::any MyCypherVisitor::visitOC_Limit(CypherParser::OC_LimitContext *context) { return defaultVisit("Limit", __LINE__, context); }
+std::any MyCypherVisitor::visitOC_Limit(CypherParser::OC_LimitContext *context) {
+  if(auto * p = context->oC_Expression())
+  {
+    // must be a literal for now.
+    auto res = p->accept(this);
+    if(res.type() == typeid(NonArithmeticOperatorExpression))
+    {
+      const auto & nao = std::any_cast<NonArithmeticOperatorExpression>(res);
+      if(nao.mayPropertyName.has_value())
+        m_errors.push_back("OC_Limit expects a no property");
+      const auto count = strToInt64(std::get<std::string>(std::get<Literal>(nao.atom.var).variant));
+      if(count < 0)
+        m_errors.push_back("OC_Limit expects a positive value");
+      else
+        return Limit{static_cast<size_t>(count)};
+    }
+    else
+      m_errors.push_back("OC_Limit expects NonArithmeticOperatorExpression");
+  }
+  else
+    m_errors.push_back("OC_Limit expects oC_Expression()");
+  return defaultVisit("Limit", __LINE__, context);
+}
 
 std::any MyCypherVisitor::visitOC_SortItem(CypherParser::OC_SortItemContext *context) { return defaultVisit("SortItem", __LINE__, context); }
 

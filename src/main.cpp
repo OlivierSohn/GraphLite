@@ -99,11 +99,10 @@ int main()
   LogIndentScope sER = logScope(std::cout, "Creating Entities and Relationships...");
   auto n1 = db.addNode("Node1", {{p_test, "3"}});
   auto n2 = db.addNode("Node2", {{p_test, "4"}, {p_what, "55"}});
-  auto r12 = db.addRelationship("Rel1", n1, n2, {{p_whatRel, ".44"}});
-  auto r22 = db.addRelationship("Rel2", n2, n2, {{p_testRel, ".1"}, {p_whatRel, ".55"}});
+  auto r12 = db.addRelationship("Rel1", n1, n2, {{p_whatRel, "0"}});
+  auto r22 = db.addRelationship("Rel2", n2, n2, {{p_testRel, "2"}, {p_whatRel, "1"}});
   sER.endScope();
 
-  //db.writeToDisk();
   {
     LogIndentScope _ = logScope(std::cout, "Printing SQL DB content...");
     db.print();
@@ -117,11 +116,6 @@ int main()
 
   try
   {
-    // Where clause with id or property lookup
-    runCypher("MATCH (`n`)       WHERE n.test = 3   RETURN id(`n`), `n`.test, `n`.`what`;");
-    runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(n) = 1 RETURN id(m), id(n), id(`r`), `m`.test;");
-    runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(m) = 1 RETURN id(m), id(n), id(`r`), `n`.test;");
-    
     runCypher("MATCH (`n`)       RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node1) RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node2) RETURN id(`n`), `n`.test, `n`.`what`;");
@@ -141,6 +135,11 @@ int main()
     runCypher("MATCH (`m`:Node2)<-[`r`]-(`n`:Node1) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test, `m`.test;");
     runCypher("MATCH (`m`:Node2)<-[]-(`n`:Node1) RETURN id(`m`), `n`.test;");
 
+    // Where clause with id or property lookup
+    runCypher("MATCH (`n`)       WHERE n.test = 3   RETURN id(`n`), `n`.test, `n`.`what`;");
+    runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(n) = 1 RETURN id(m), id(n), id(`r`), `m`.test;");
+    runCypher("MATCH (`m`)<-[`r`]-(`n`) WHERE id(m) = 1 RETURN id(m), id(n), id(`r`), `n`.test;");
+
     // where clause with multiple terms.
     runCypher("MATCH (`n`)       WHERE n.test >= 2.5 AND n.test <= 3.5   RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`)       WHERE n.test >= 2.5 OR n.test <= 3.5   RETURN id(`n`), `n`.test, `n`.`what`;");
@@ -157,10 +156,31 @@ int main()
     runCypher("MATCH (e1)-[r1]->(e2)-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
     runCypher("MATCH (e1)-[]->()-[r2]->(e2) WHERE (e1.test >= 2.5 AND e1.test <= 3.5) RETURN id(e1), id(e2);");
 
-    // TODO support prepared statements to have faster graph creation
-    // (we will have one prepared statement for creating the relationships, one for creating nodes).
+    runCypher("MATCH (`n`)  RETURN id(`n`) LIMIT 1;");
+    runCypher("MATCH ()-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel` LIMIT 1;");
+    runCypher("MATCH ()-[`r`]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
+    runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
+    runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 0;");
 
-    // todo support LIMIT
+    // todo factorize code in DB (small / large path pattern) : use variant for vector vs unordered_set on ids of relationships?
+
+    // todo split test code (Perf / non perf)
+
+    // todo optimize LIMIT implementation to reduce the numbers of SQL rows fetched:
+    // when we know we will not post filter we can have the limit clause in the system relationship table.
+    // when we may post-filter we could use pagination with exponential size increase:
+    //     page_size = std::max(1000, 2 * limit->maxCountRows);
+    //     then at each iteration
+    //       page_size *= 2;
+    //   the worst case is if there are many relationships (~100 millions) and the post filtering only allows one:
+    //     MATCH (a)-[]->(b) WHERE b.name = 'Albert Einstein' RETURN id(r) LIMIT 1
+    //     MATCH (a)-[]->(b) WHERE b.name = 'Albert Einstein' AND a.name = 'xyz' RETURN id(r) LIMIT 1
+    //         in this case we should rather start querying for b, using the post filter constraint, and then only query
+    //         the system relationships table with id(B) IN (...)
+
+    // todo variable length relationships: (a)-[r1:*..3]->(b)
+
+    // todo RETURN entire elements
 
     // todo support non-equi-var expressions, by evaluating them manually before returning results.
     
@@ -177,16 +197,12 @@ int main()
     //     it may be faster to start by querying the non-system nodes tables, deduce which nodes ids are relevant, and then
     //     use these ids to filter the relationships table.
     //   -> create a test example that shows the perf issue before trying to fix it.
-
-    // todo variable length relationships: (a)-[r1:*..3]->(b)
     
     // todo deduce labels from where clause (used in FFP):
     //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;");
 
     // todo (property value)
     //runCypher("MATCH (`n`:Node1{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;");
-
-    // todo same as above, verify we do a union on "entity types that have a test property"
     //runCypher("MATCH (`n`:{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;");
 
     return 0;
