@@ -162,9 +162,6 @@ int main()
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 0;");
 
-    // todo support string ids. (via template type on DB ?)
-    // when opening a DB, verify it has the right type of IDs.
-    
     // todo suport creating an index on a property type.
 
     // todo optimize LIMIT implementation to reduce the numbers of SQL rows fetched:
@@ -197,10 +194,10 @@ int main()
     //     use these ids to filter the relationships table.
     //   -> create a test example that shows the perf issue before trying to fix it.
     
-    // todo deduce labels from where clause (used in FFP):
+    // todo deduce labels from where clause:
     //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;");
 
-    // todo (property value)
+    // todo (property value in the node pattern)
     //runCypher("MATCH (`n`:Node1{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;");
     //runCypher("MATCH (`n`:{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;");
 

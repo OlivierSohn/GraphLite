@@ -231,3 +231,19 @@ bool operator == (const ByteArrayPtr& a, const ByteArrayPtr& b)
   // a == b
   return true;
 }
+
+std::string toStr(ValueType t)
+{
+  switch(t)
+  {
+    case ValueType::Integer:
+      return "Integer";
+    case ValueType::String:
+      return "String";
+    case ValueType::ByteArray:
+      return "ByteArray";
+    case ValueType::Float:
+      return "Float";
+  }
+  return "?";
+}

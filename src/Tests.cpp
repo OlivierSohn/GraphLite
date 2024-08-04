@@ -552,6 +552,48 @@ TEST(Test, DefaultValues)
   }
 }
 
+
+// Verify that the GraphDB constructor throws when there is a mismatch between
+// the ID types in the DB and the ID template parameter type of the class.
+TEST(Test, DBThrowsOnInvalidIDType)
+{
+  LogIndentScope _{};
+  
+  const std::filesystem::path dbFile{"Test.DBThrowsOnInvalidIDType.sqlite3db"};
+  
+  const auto p_age = mkProperty("Age");
+  
+  const auto p_since = mkProperty("since");
+  
+  const auto ageSchema = PropertySchema{
+    p_age,
+    ValueType::Integer,
+    IsNullable::Yes,
+    std::make_shared<Value>(3)
+  };
+  
+  const auto sinceSchema = PropertySchema{
+    p_since,
+    ValueType::Integer,
+    IsNullable::Yes,
+    std::make_shared<Value>(Nothing{})
+  };
+
+  // Here we write the DB file, with String IDs
+  {
+    auto dbWrapper = std::make_unique<GraphWithStats<StringPtr>>(dbFile, Overwrite::Yes);
+    
+    auto & db = dbWrapper->getDB();
+    db.addType("Person", true, {ageSchema});
+    db.addType("Knows", false, {sinceSchema});
+  }
+  // Here we read the DB file, assuming Integer ids
+  {
+    ASSERT_THROW(std::make_unique<GraphWithStats<int64_t>>(dbFile, Overwrite::No), std::exception);
+  }
+}
+
+
 TEST(Test, ReturnIDs)
 {
   LogIndentScope _{};

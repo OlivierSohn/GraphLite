@@ -384,9 +384,43 @@ GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
   }
   else
   {
-    // read types from namedTypes.
-    // read property names from property tables
+    // Infer the graph schema from the DB
     
+    // Throw if the IDs types do not match the template parameter of this class defining the ID type.
+    {
+      struct Data
+      {
+        PropertySchema expectedIDPropertySchema;
+        std::optional<PropertySchema> inferredIDPropertySchema;
+      } data{m_idProperty};
+      
+      if(auto res = sqlite3_exec("PRAGMA table_info('nodes')", [](void *p_Data, int argc, Value *argv, char **column) {
+        auto & data = *static_cast<Data*>(p_Data);
+        const std::string columnName = std::get<StringPtr>(argv[1]).string.get();
+        if(columnName == data.expectedIDPropertySchema.name.symbolicName.str)
+        {
+          const char * sqliteType = std::get<StringPtr>(argv[2]).string.get();
+          const auto propertyType = SQLiteTypeToValueType(sqliteType);
+          
+          const bool notNull = std::holds_alternative<int64_t>(argv[3]) && (std::get<int64_t>(argv[3]) == 1);
+          const auto isNullable = notNull ? IsNullable::No : IsNullable::Yes;
+          data.inferredIDPropertySchema = PropertySchema{
+            openCypher::mkProperty(columnName),
+            propertyType
+          };
+        }
+        return 0;
+      }, &data, 0))
+        throw std::logic_error(sqlite3_errstr(res));
+      if(!data.inferredIDPropertySchema.has_value())
+        throw std::invalid_argument("Could not find ID field '" + m_idProperty.name.symbolicName.str + "' in nodes table.");
+      if(data.inferredIDPropertySchema->type != m_idProperty.type)
+        throw std::invalid_argument("ID type mismatch, expected " + toStr(m_idProperty.type) + " but have " + toStr(data.inferredIDPropertySchema->type));
+
+         
+         
+    }
+
     const char* msg{};
     if(auto res = sqlite3_exec("SELECT NamedType, Kind, TypeIdx FROM namedTypes;", [](void *p_This, int argc, Value *argv, char **column) {
       auto & This = *static_cast<GraphDB*>(p_This);

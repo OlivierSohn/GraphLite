@@ -26,6 +26,8 @@ enum class ValueType
   Float
 };
 
+std::string toStr(ValueType);
+
 struct Nothing{
 };
 
