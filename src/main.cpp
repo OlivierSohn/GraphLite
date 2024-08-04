@@ -28,7 +28,7 @@ int main()
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
       for(const auto & [i, j] : m_resultOrder)
-        std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
+        std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j] << '|';
       std::cout << std::endl;
     }
     void onCypherQueryEnds()
@@ -67,15 +67,15 @@ int main()
   auto onSQLQueryDuration = [&](const std::chrono::steady_clock::duration& )
   {
   };
-  auto onDBDiagnosticContent = [](int argc, char **argv, char **column)
+  auto onDBDiagnosticContent = [&](int argc, Value *argv, char **column)
   {
     if(printSQLRequests)
     {
       auto _ = LogIndentScope{};
       std::cout << LogIndent{};
       for (int i=0; i < argc; i++)
-        printf("%s,\t", argv[i]);
-      printf("\n");
+        std::cout << argv[i] << ",\t";
+      std::cout << std::endl;
     }
     return 0;
   };
@@ -97,10 +97,10 @@ int main()
     db.addType("Rel2", false, {p_testRel, p_whatRel});
   }
   LogIndentScope sER = logScope(std::cout, "Creating Entities and Relationships...");
-  auto n1 = db.addNode("Node1", {{p_test, "3"}});
-  auto n2 = db.addNode("Node2", {{p_test, "4"}, {p_what, "55"}});
-  auto r12 = db.addRelationship("Rel1", n1, n2, {{p_whatRel, "0"}});
-  auto r22 = db.addRelationship("Rel2", n2, n2, {{p_testRel, "2"}, {p_whatRel, "1"}});
+  auto n1 = db.addNode("Node1", mkVec(std::pair{p_test, Value(3)}));
+  auto n2 = db.addNode("Node2", mkVec(std::pair{p_test, Value(4)}, std::pair{p_what, Value(55)}));
+  auto r12 = db.addRelationship("Rel1", n1, n2, mkVec(std::pair{p_whatRel, Value(0)}));
+  auto r22 = db.addRelationship("Rel2", n2, n2, mkVec(std::pair{p_testRel, Value(2)}, std::pair{p_whatRel, Value(1)}));
   sER.endScope();
 
   {
@@ -162,12 +162,10 @@ int main()
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 0;");
 
-    // todo split test code (Perf / non perf)
-
     // todo optimize LIMIT implementation to reduce the numbers of SQL rows fetched:
     // when we know we will not post filter we can have the limit clause in the system relationship table.
     // when we may post-filter we could use pagination with exponential size increase:
-    //     page_size = std::max(1000, 2 * limit->maxCountRows);
+    //     page_size = std::max(10000, 10 * limit->maxCountRows);
     //     then at each iteration
     //       page_size *= 2;
     //   the worst case is if there are many relationships (~100 millions) and the post filtering only allows one:
@@ -184,8 +182,6 @@ int main()
 
     // todo support non-equi-var expressions, by evaluating them manually before returning results.
     // i.e: WHERE n.weight > 3 OR r.status = 2
-
-    // todo support different property types (string, int, double)
 
     // TODO support UNION
 

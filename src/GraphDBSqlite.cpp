@@ -7,6 +7,9 @@
 #include <sstream>
 #include <numeric>
 
+#define GRAPHDBSQLITE_STATICALLY_LINK_CARRAY_EXTENSION 1
+
+#if GRAPHDBSQLITE_STATICALLY_LINK_CARRAY_EXTENSION
 extern "C"
 {
 SQLITE_API int sqlite3_carray_init(
@@ -15,6 +18,7 @@ SQLITE_API int sqlite3_carray_init(
                         const sqlite3_api_routines *pApi
                         );
 }
+#endif // GRAPHDBSQLITE_STATICALLY_LINK_CARRAY_EXTENSION
 
 struct IDAndType
 {
@@ -31,15 +35,177 @@ struct hash<IDAndType>
 {
   size_t operator()(const IDAndType& i) const
   {
-    return std::hash<std::string>()(i.id);
+    return std::hash<ID>()(i.id);
   }
 };
 }
 
+namespace
+{
+
+const char * valueTypeToSQLliteTypeAffinity(ValueType t)
+{
+  switch(t)
+  {
+    case ValueType::String:
+      return "TEXT";
+    case ValueType::Float:
+      return "REAL";
+    case ValueType::Integer:
+      return "INTEGER";
+    case ValueType::ByteArray:
+      return "BLOB";
+    default:
+      throw std::logic_error("valueTypeToSQLliteTypeAffinity: type is not supported");
+  }
+}
+
+bool isNullSQLKeyword(std::string const & str)
+{
+  if(str.size() != 4)
+    return false;
+  auto str2 = str;
+  std::transform(str2.begin(), str2.end(), str2.begin(),
+                 [](unsigned char c){ return std::tolower(c); });
+  return str2 == "null";
+}
+
+ValueType SQLiteTypeToValueType(const char* sqliteColumnType)
+{
+  std::string str{sqliteColumnType};
+  
+  std::transform(str.begin(), str.end(), str.begin(),
+                 [](unsigned char c){ return std::tolower(c); });
+  
+  if(str.starts_with("int"))
+    return ValueType::Integer;
+  if(str.starts_with("bigint"))
+    return ValueType::Integer;
+  
+  if(str.starts_with("num"))
+    return ValueType::Float;
+  if(str.starts_with("real"))
+    return ValueType::Float;
+  if(str.starts_with("flo"))
+    return ValueType::Float;
+  
+  if(str.starts_with("text"))
+    return ValueType::String;
+  if(str.starts_with("str"))
+    return ValueType::String;
+  if(str.starts_with("var"))
+    return ValueType::String;
+  
+  if(str.starts_with("blob"))
+    return ValueType::ByteArray;
+  
+  throw std::logic_error("Could not infer property type from SQLite data type: '" + str + "'");
+}
+
+std::string sqlliteQuote(const std::string& s)
+{
+  std::string res;
+  res.reserve(s.size() + 2);
+  res.push_back('\'');
+  for(const auto & c : s)
+  {
+    if(c == '\'')
+      res.push_back('\'');
+    res.push_back(c);
+  }
+  res.push_back('\'');
+  return res;
+}
+
+
+std::string sqlliteUnquote(const std::string& s)
+{
+  if(s.size() < 2 || s[0] != '\'' || s[s.size()-1] != '\'')
+    throw std::logic_error("invalid quoted string value:" + s);
+  std::string res;
+  res.reserve(s.size());
+  bool skipNextQuote = false;
+  for(size_t i=1, end = s.size()-1; i<end; ++i)
+  {
+    const bool isQuote = s[i] == '\'';
+    if(skipNextQuote)
+    {
+      if(!isQuote)
+        throw std::logic_error("invalid quoted string value:" + s);
+      skipNextQuote = false;
+    }
+    else
+    {
+      res.push_back(s[i]);
+      if(isQuote)
+        skipNextQuote = true;
+    }
+  }
+  if(skipNextQuote)
+    throw std::logic_error("invalid quoted string value:" + s);
+  return res;
+}
+
+void verifyTypeConsistency(const Value& value, const PropertySchema& propertySchema)
+{
+  std::visit([&](auto && arg) {
+    using T = std::decay_t<decltype(arg)>;
+    if constexpr (std::is_same_v<T, int64_t>)
+    {
+      if(propertySchema.type != ValueType::Integer)
+        throw std::logic_error("Integer value for non-Integer property.");
+    }
+    else if constexpr (std::is_same_v<T, double>)
+    {
+      if(propertySchema.type != ValueType::Float)
+        throw std::logic_error("Float value for non-Float property.");
+    }
+    else if constexpr (std::is_same_v<T, StringPtr>)
+    {
+      if(propertySchema.type != ValueType::String)
+        throw std::logic_error("String value for non-String property.");
+    }
+    else if constexpr (std::is_same_v<T, ByteArrayPtr>)
+    {
+      if(propertySchema.type != ValueType::ByteArray)
+        throw std::logic_error("ByteArray value for non-ByteArray property.");
+    }
+    else if constexpr (std::is_same_v<T, Nothing>)
+    {
+      if(propertySchema.isNullable == IsNullable::No)
+        throw std::logic_error("Null value for non-nullable property");
+    }
+    else
+      static_assert(c_false<T>, "non-exhaustive visitor!");
+  }, value);
+}
+
+void toSQLQueryStringValue(const Value & value, std::ostream& os)
+{
+  std::visit([&](auto && arg) {
+    using T = std::decay_t<decltype(arg)>;
+    if constexpr (std::is_same_v<T, int64_t>)
+      os << arg;
+    else if constexpr (std::is_same_v<T, double>)
+      os << arg;
+    else if constexpr (std::is_same_v<T, StringPtr>)
+      os << sqlliteQuote({arg.string.get()});
+    else if constexpr (std::is_same_v<T, ByteArrayPtr>)
+      os << arg.toHexStr();
+    else if constexpr (std::is_same_v<T, Nothing>)
+      os << "NULL";
+    else
+      static_assert(c_false<T>, "non-exhaustive visitor!");
+  }, value);
+}
+
+}  // NS
+
 GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
                  const FuncOnSQLQueryDuration& fOnSQLQueryDuration,
                  const FuncOnDBDiagnosticContent& fOnDiagnostic,
-                 const std::optional<std::filesystem::path>& dbPath)
+                 const std::optional<std::filesystem::path>& dbPath,
+                 const std::optional<Overwrite> overwrite)
 : m_fOnSQLQuery(fOnSQLQuery)
 , m_fOnSQLQueryDuration(fOnSQLQueryDuration)
 , m_fOnDiagnostic(fOnDiagnostic)
@@ -48,7 +214,19 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
   
   const bool useIndices = true;
   
-  const bool reinitDB = !dbPath.has_value() || !std::filesystem::exists(*dbPath);
+  const Overwrite canOverwriteDB = [&]()
+  {
+    if(overwrite.has_value())
+      return *overwrite;
+    if(dbPath.has_value())
+      // The caller has specified a path, in this case de default is to NOT overwrite the DB file.
+      return Overwrite::No;
+    else
+      // No path was specified by the caller, in this case de default is to overwrite the DB file.
+      return Overwrite::Yes;
+  }();
+
+  const bool reinitDB = (canOverwriteDB == Overwrite::Yes) || !std::filesystem::exists(*dbPath);
   const auto dbFile = dbPath.value_or(std::filesystem::path{c_defaultDBPath});
 
   if(reinitDB)
@@ -57,14 +235,22 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
   if(auto res = sqlite3_open(dbFile.string().c_str(), &m_db))
     throw std::logic_error(sqlite3_errstr(res));
   char* msg{};
-  // to load the extension dynamically:
-  /*if(auto res = sqlite3_db_config(m_db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1, 0))
-     throw std::logic_error(sqlite3_errstr(res));
-  if(auto res = sqlite3_load_extension(m_db, "carray", 0, &msg))
-     throw std::logic_error(msg);*/
-  // but here we have the extension linked statically so we initialize the extension manually:
+
+#if GRAPHDBSQLITE_STATICALLY_LINK_CARRAY_EXTENSION
+
+  // When we statically link the carray extension we need to initialize
+  // the extension manually.
   if(auto res = sqlite3_carray_init(m_db, &msg, nullptr))
     throw std::logic_error(msg);
+
+#else
+
+  if(auto res = sqlite3_db_config(m_db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1, 0))
+     throw std::logic_error(sqlite3_errstr(res));
+  if(auto res = sqlite3_load_extension(m_db, "carray", 0, &msg))
+     throw std::logic_error(msg);
+
+#endif  // GRAPHDBSQLITE_STATICALLY_LINK_CARRAY_EXTENSION
 
   if(reinitDB)
   {
@@ -82,7 +268,8 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
         std::ostringstream s;
         s << "CREATE TABLE " << tableName << " (";
         {
-          s << m_idProperty << " INTEGER PRIMARY KEY, ";
+          s << m_idProperty.name << " ";
+          s << valueTypeToSQLliteTypeAffinity(m_idProperty.type) << " NOT NULL PRIMARY KEY, ";
           s << "NodeType INTEGER";
         }
         s << ");";
@@ -108,10 +295,11 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
         std::ostringstream s;
         s << "CREATE TABLE " << tableName << " (";
         {
-          s << m_idProperty << " INTEGER PRIMARY KEY, ";
-          s << "RelationshipType INTEGER, ";
-          s << "OriginID INTEGER, ";
-          s << "DestinationID INTEGER";
+          s << m_idProperty.name << " ";
+          s << valueTypeToSQLliteTypeAffinity(m_idProperty.type) << " NOT NULL PRIMARY KEY, ";
+          s << "RelationshipType INTEGER NOT NULL, ";
+          s << "OriginID INTEGER NOT NULL, ";
+          s << "DestinationID INTEGER NOT NULL";
         }
         s << ");";
         if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
@@ -147,9 +335,9 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
       std::ostringstream s;
       s << "CREATE TABLE " << tableName << " (";
       {
-        s << "TypeIdx INTEGER PRIMARY KEY, ";
-        s << "Kind INTEGER, ";
-        s << "NamedType TEXT";
+        s << "TypeIdx INTEGER NOT NULL PRIMARY KEY, ";
+        s << "Kind INTEGER NOT NULL, ";
+        s << "NamedType TEXT NOT NULL";
       }
       s << ");";
       if(auto res = sqlite3_exec(s.str(), 0, 0, 0))
@@ -162,18 +350,19 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
     // read property names from property tables
     
     const char* msg{};
-    if(auto res = sqlite3_exec("SELECT NamedType, Kind, TypeIdx FROM namedTypes;", [](void *p_This, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec("SELECT NamedType, Kind, TypeIdx FROM namedTypes;", [](void *p_This, int argc, Value *argv, char **column) {
       auto & This = *static_cast<GraphDB*>(p_This);
-      size_t typeIdx = atoi(argv[2]);
-      const std::string kind = std::string{argv[1]};
+      size_t typeIdx = std::get<int64_t>(argv[2]);
+      const std::string kind{ std::get<StringPtr>(argv[1]).string.get() };
       const bool isNode = kind == std::string{"E"};
       const bool isRela = kind == std::string{"R"};
       if(!isNode && !isRela)
         throw std::logic_error("Expected E or R, got:" + kind);
+      const std::string namedType = std::get<StringPtr>(argv[0]).string.get();
       if(isNode)
-        This.m_indexedNodeTypes.add(typeIdx, argv[0]);
+        This.m_indexedNodeTypes.add(typeIdx, namedType);
       else
-        This.m_indexedRelationshipTypes.add(typeIdx, argv[0]);
+        This.m_indexedRelationshipTypes.add(typeIdx, namedType);
       return 0;
     }, this, &msg))
       throw std::logic_error(std::string{msg});
@@ -185,14 +374,74 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
       typeNames.push_back(typeName);
     for(const auto & typeName : typeNames)
     {
-      m_properties[typeName].insert(m_idProperty);
-      std::set<PropertyKeyName> & set = m_properties[typeName];
+      if(auto it = m_properties.find(typeName); it != m_properties.end())
+        throw std::logic_error("Invalid DB, type already exists:" + typeName);
+
+      std::set<PropertySchema>& set = m_properties[typeName];
+      set.insert(m_idProperty);
 
       std::ostringstream s;
       s << "PRAGMA table_info('" << typeName << "')";
-      if(auto res = sqlite3_exec(s.str(), [](void *p_Set, int argc, char **argv, char **column) {
-        auto & set = *static_cast<std::set<PropertyKeyName>*>(p_Set);
-        set.insert(openCypher::mkProperty(argv[1]));
+      if(auto res = sqlite3_exec(s.str(), [](void *p_Set, int argc, Value *argv, char **column) {
+        auto & set = *static_cast<std::set<PropertySchema>*>(p_Set);
+        const std::string columnName = std::get<StringPtr>(argv[1]).string.get();
+        const char * sqliteType = std::get<StringPtr>(argv[2]).string.get();
+        const auto propertyType = SQLiteTypeToValueType(sqliteType);
+        
+        const bool notNull = std::holds_alternative<int64_t>(argv[3]) && (std::get<int64_t>(argv[3]) == 1);
+        const auto isNullable = notNull ? IsNullable::No : IsNullable::Yes;
+
+        const bool hasDefaultValue = !std::holds_alternative<Nothing>(argv[4]);
+        std::shared_ptr<Value> defaultValue;
+        if(hasDefaultValue)
+        {
+          // The default value is returned as a Value containing a StringPtr,
+          // we convert it to the property type here.
+          
+          const std::string defaultValueStr{std::get<StringPtr>(argv[4]).string.get()};
+          
+          if((isNullable == IsNullable::Yes) && isNullSQLKeyword(defaultValueStr))
+            defaultValue = std::make_shared<Value>(Nothing{});
+          else
+          {
+            switch(propertyType)
+            {
+              case ValueType::Integer:
+              {
+                // may throw
+                const auto i64 = strToInt64(defaultValueStr);
+                defaultValue = std::make_shared<Value>(i64);
+                break;
+              }
+              case ValueType::Float:
+              {
+                // may throw
+                const auto dbl = strToDouble(defaultValueStr);
+                defaultValue = std::make_shared<Value>(dbl);
+                break;
+              }
+              case ValueType::String:
+              {
+                auto unQuotedString = sqlliteUnquote(defaultValueStr);
+                defaultValue = std::make_shared<Value>(StringPtr::fromCStr(unQuotedString.c_str()));
+                break;
+              }
+              case ValueType::ByteArray:
+              {
+                defaultValue = std::make_shared<Value>(ByteArrayPtr::fromHexStr(defaultValueStr));
+                break;
+              }
+            }
+          }
+        }
+        
+        set.insert(PropertySchema{
+          openCypher::mkProperty(columnName),
+          propertyType,
+          isNullable,
+          defaultValue
+        });
+        
         return 0;
       }, &set, 0))
         throw std::logic_error(sqlite3_errstr(res));
@@ -205,7 +454,7 @@ GraphDB::~GraphDB()
   sqlite3_close(m_db);
 }
 
-void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<PropertyKeyName> &properties)
+void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<PropertySchema> &properties)
 {
   // We no longer delete
   /*
@@ -215,18 +464,36 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
     auto res = sqlite3_exec(req, 0, 0, 0);
   }
    */
+
+  if(auto it = m_properties.find(typeName); it != m_properties.end())
+    throw std::logic_error("CREATE TABLE, type already exists.");
+
   {
-    const char*msg{};
-    std::ostringstream s;
-    s << "CREATE TABLE " << typeName << " (";
-    {
-      s << m_idProperty << " INTEGER PRIMARY KEY"; // For simplicity we don't have a notion of objectid, only id.
-      for(const auto & property: properties)
-        s << ", " << property << " int DEFAULT NULL";
-    }
-    s << ");";
-    if(auto res = sqlite3_exec(s.str(), 0, 0, &msg))
-      throw std::logic_error("CREATE TABLE: " + std::string{msg});
+    // It is not necessary to cache the prepared statement: types are added very infrequently
+    // so we don't need to optimize the query compilation time.
+    runVolatileStatement([&](SQLBoundVarIndex & var, std::ostringstream& s) {
+      s << "CREATE TABLE " << typeName << " (";
+      {
+        s << m_idProperty.name << " ";
+        s << valueTypeToSQLliteTypeAffinity(m_idProperty.type) << " NOT NULL PRIMARY KEY";
+        for(const auto & property : properties)
+        {
+          s << ", " << property.name << " " << valueTypeToSQLliteTypeAffinity(property.type);
+          if(property.isNullable == IsNullable::No)
+            s << " NOT NULL";
+          if(property.defaultValue)
+          {
+            verifyTypeConsistency(*property.defaultValue, property);
+            
+            s << " DEFAULT ";
+            toSQLQueryStringValue(*property.defaultValue, s);
+          }
+        }
+      }
+      s << ")";
+    },
+                       [&](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
+    });
   }
   // record type
   {
@@ -237,10 +504,9 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
     << "') RETURNING TypeIdx";
     size_t typeIdx{std::numeric_limits<size_t>::max()};
     const char* msg{};
-    if(auto res = sqlite3_exec(s.str(), [](void *p_typeIdx, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(s.str(), [](void *p_typeIdx, int argc, Value *argv, char **column) {
       auto & typeIdx = *static_cast<size_t*>(p_typeIdx);
-      for (int i=0; i< argc; i++)
-        typeIdx = atoi(argv[i]);
+      typeIdx = std::get<int64_t>(argv[0]);
       return 0;
     }, &typeIdx, &msg))
       throw std::logic_error(std::string{msg});
@@ -253,29 +519,24 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
     auto & set = m_properties[typeName];
     for(const auto & propertyName : properties)
       set.insert(propertyName);
-    m_properties[typeName].insert(m_idProperty);
+    set.insert(m_idProperty);
   }
   // todo rollback if there is an error.
 }
 
-bool GraphDB::prepareProperties(const std::string& typeName,
-                                const std::vector<std::pair<PropertyKeyName, std::string>>& propValues,
-                                std::vector<PropertyKeyName>& propertyNames,
-                                std::vector<std::string>& propertyValues)
+void GraphDB::validatePropertyValues(const std::string& typeName,
+                                     const std::vector<std::pair<PropertyKeyName, Value>>& propValues) const
 {
-  propertyNames.clear();
-  propertyValues.clear();
-  
   auto it = m_properties.find(typeName);
   if(it == m_properties.end())
-    return false;
+    throw std::logic_error("The element type doesn't exist.");
   for(const auto & [name, value] : propValues)
   {
-    if(!it->second.count(name))
-      // Property doesn't exist in the schema
-      return false;
-    propertyValues.push_back(value);
-    propertyNames.push_back(name);
+    auto it2 = it->second.find(name);
+    if(it2 == it->second.end())
+      throw std::logic_error(std::string{"The property '"} + name.symbolicName.str + "' doesn't exist for the type '" + typeName + "'");
+    const auto & propertySchema = *it2;
+    verifyTypeConsistency(value, propertySchema);
   }
   return true;
 }
@@ -307,43 +568,42 @@ void GraphDB::endTransaction()
 }
 
 ID GraphDB::addNode(const std::string& typeName,
-                    const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
+                    const std::vector<std::pair<PropertyKeyName, Value>>& propValues)
 {
   const auto typeIdx = m_indexedNodeTypes.getIfExists(typeName);
   if(!typeIdx.has_value())
     throw std::logic_error("unknown node type: " + typeName);
 
-  std::string nodeId;
+  std::optional<ID> nodeId;
 
   runCachedStatement(m_addNodePreparedStatement,
                      [&](SQLBoundVarIndex & var, std::ostringstream& s) {
     s << "INSERT INTO nodes (NodeType) Values("
     << var.nextAsStr()
-    <<") RETURNING " << m_idProperty;
+    <<") RETURNING " << m_idProperty.name;
   },
                      [&](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
-    ps.bindVariable(var.next(), *typeIdx);
+    ps.bindVariable(var.next(), static_cast<int64_t>(*typeIdx));
   },
-                     [](void *p_nodeId, int argc, char **argv, char **column) {
-    auto & nodeId = *static_cast<std::string*>(p_nodeId);
-    for (int i=0; i < argc; i++)
-      nodeId = argv[i];
+                     [](void *p_nodeId, int argc, Value *argv, char **column) {
+    auto & nodeId = *static_cast<std::optional<ID>*>(p_nodeId);
+    nodeId = std::get<ID>(argv[0]);
     return 0;
   },
                      &nodeId);
 
-  if(nodeId.empty())
+  if(!nodeId.has_value())
     throw std::logic_error("no result for nodeId.");
   
-  addElement(typeName, nodeId, propValues);
-  return nodeId;
+  addElement(typeName, *nodeId, propValues);
+  return *nodeId;
 }
 
 // There is a system table to generate relationship ids.
 ID GraphDB::addRelationship(const std::string& typeName,
                             const ID& originEntity,
                             const ID& destinationEntity,
-                            const std::vector<std::pair<PropertyKeyName, std::string>>& propValues,
+                            const std::vector<std::pair<PropertyKeyName, Value>>& propValues,
                             bool verifyNodesExist)
 {
   const auto typeIdx = m_indexedRelationshipTypes.getIfExists(typeName);
@@ -357,7 +617,7 @@ ID GraphDB::addRelationship(const std::string& typeName,
     size_t expectedCountMatches{1};
     {
       std::ostringstream s;
-      s << "SELECT " << m_idProperty << " from nodes WHERE " << m_idProperty << " IN (";
+      s << "SELECT " << m_idProperty.name << " from nodes WHERE " << m_idProperty.name << " IN (";
       s << originEntity;
       if(originEntity != destinationEntity)
       {
@@ -365,7 +625,7 @@ ID GraphDB::addRelationship(const std::string& typeName,
         ++expectedCountMatches;
       }
       s << ")";
-      if(auto res = sqlite3_exec(s.str(), [](void *p_countMatches, int argc, char **argv, char **column) {
+      if(auto res = sqlite3_exec(s.str(), [](void *p_countMatches, int argc, Value *argv, char **column) {
         auto & countMatches = *static_cast<size_t*>(p_countMatches);
         ++countMatches;
         return 0;
@@ -376,7 +636,7 @@ ID GraphDB::addRelationship(const std::string& typeName,
       throw std::logic_error("origin or destination node not found.");
   }
 
-  std::string relId;
+  std::optional<ID> relId;
 
   runCachedStatement(m_addRelationshipPreparedStatement,
                      [&](SQLBoundVarIndex & var, std::ostringstream& s) {
@@ -384,54 +644,55 @@ ID GraphDB::addRelationship(const std::string& typeName,
     << var.nextAsStr()
     << ", " << var.nextAsStr()
     << ", " << var.nextAsStr()
-    <<") RETURNING " << m_idProperty;
+    <<") RETURNING " << m_idProperty.name;
   },
                      [&](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
-    ps.bindVariable(var.next(), *typeIdx);
-    ps.bindVariable(var.next(), strToInt64(originEntity));
-    ps.bindVariable(var.next(), strToInt64(destinationEntity));
+    ps.bindVariable(var.next(), static_cast<int64_t>(*typeIdx));
+    ps.bindVariable(var.next(), originEntity);
+    ps.bindVariable(var.next(), destinationEntity);
   },
-                     [](void *p_relId, int argc, char **argv, char **column) {
-    auto & relId = *static_cast<std::string*>(p_relId);
-    for (int i=0; i< argc; i++)
-      relId = argv[i];
+                     [](void *p_relId, int argc, Value *argv, char **column) {
+    auto & relId = *static_cast<std::optional<ID>*>(p_relId);
+    relId = std::get<ID>(argv[0]);
     return 0;
   },
                      &relId);
 
-  if(relId.empty())
+  if(!relId.has_value())
     throw std::logic_error("no result for relId.");
-  addElement(typeName, relId, propValues);
-  return relId;
+  addElement(typeName, *relId, propValues);
+  return *relId;
 }
 
 void GraphDB::addElement(const std::string& typeName,
                          const ID& id,
-                         const std::vector<std::pair<PropertyKeyName, std::string>>& propValues)
+                         const std::vector<std::pair<PropertyKeyName, Value>>& propValues)
 {
-  std::vector<PropertyKeyName> propertyNames;
-  std::vector<std::string> propertyValues;
-  if(!prepareProperties(typeName, propValues, propertyNames, propertyValues))
-    throw std::logic_error("some properties don't exist in the schema.");
+  validatePropertyValues(typeName, propValues);
+  
+  std::vector<PropertyKeyName> allPropertyNames;
+  allPropertyNames.reserve(propValues.size());
+  for(const auto & [propertyName, _] : propValues)
+    allPropertyNames.push_back(propertyName);
 
   runCachedStatement(m_addElementPreparedStatements,
-                     AddElementPreparedStatementKey{typeName, propertyNames},
+                     AddElementPreparedStatementKey{typeName, allPropertyNames},
                      [&](SQLBoundVarIndex & var, std::ostringstream& s) {
-    s << "INSERT INTO " << typeName << " (" << m_idProperty;
-    for(const auto & propertyName : propertyNames)
+    s << "INSERT INTO " << typeName << " (" << m_idProperty.name;
+    for(const auto & [propertyName, _] : propValues)
       s << ", " << propertyName;
     s << ") VALUES (";
     
     s << var.nextAsStr(); // id
-    for(const auto & _ : propertyValues)
+    for(const auto & _ : propValues)
       s << ", " << var.nextAsStr();
     
     s << ");";
   },
                      [&](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
-    ps.bindVariable(var.next(), strToInt64(id));
-    for(const auto & value : propertyValues)
-      ps.bindVariable(var.next(), strToInt64(value));
+    ps.bindVariable(var.next(), id);
+    for(const auto & [_, value] : propValues)
+      ps.bindVariable(var.next(), value);
   });
 }
 
@@ -439,17 +700,17 @@ void GraphDB::print()
 {
   std::vector<std::string> names;
   if(auto res = sqlite3_exec("SELECT name FROM sqlite_master WHERE type='table';",
-                             [](void *p_names, int argc, char **argv, char **column) {
+                             [](void *p_names, int argc, Value *argv, char **column) {
     auto & names = *static_cast<std::vector<std::string>*>(p_names);
     for (int i=0; i< argc; i++)
-      names.push_back(argv[i]);
+      names.emplace_back(std::get<StringPtr>(argv[i]).string.get());
     return 0;
   }, &names, 0))
     throw std::logic_error(sqlite3_errstr(res));
   
   for(const auto & name: names)
   {
-    auto diagFunc = [](void *p_This, int argc, char **argv, char **column) {
+    auto diagFunc = [](void *p_This, int argc, Value *argv, char **column) {
       static_cast<GraphDB*>(p_This)->m_fOnDiagnostic(argc, argv, column);
       return 0;
     };
@@ -514,7 +775,7 @@ std::vector<size_t> GraphDB::labelsToTypeIndices(const Element elem, const std::
 // and if the tree results in a single "NULL" node, we return false.
 [[nodiscard]]
 bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
-                           const std::set<openCypher::PropertyKeyName>& sqlFields,
+                           const std::set<PropertySchema>& sqlFields,
                            const std::map<openCypher::Variable, std::map<openCypher::PropertyKeyName, std::string>>& propertyMappingCypherToSQL,
                            std::string& sqlFilter,
                            sql::QueryVars & vars)
@@ -679,7 +940,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
       if(hasTraversalDirectionAny)
       {
         // TODO replace undirectedRelationships by a VIEW,
-        // check performance is the same on large graph.
+        // verify that performance is the same on large graph.
         s <<R"V0G0N(WITH undirectedRelationships(SYS__ID, RelationshipType, OriginID, DestinationID) as NOT MATERIALIZED(
   SELECT A.SYS__ID, A.RelationshipType, A.OriginID, A.DestinationID FROM relationships A
   UNION ALL
@@ -837,7 +1098,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
       {
         std::map<Variable, std::map<PropertyKeyName, std::string>> propertyMappingCypherToSQL;
         for(const auto & [var, idField] : variableToIDField)
-          propertyMappingCypherToSQL[var][m_idProperty] = idField;
+          propertyMappingCypherToSQL[var][m_idProperty.name] = idField;
         std::string sqlFilter;
         if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter, sqlVars))
           throw std::logic_error("[Unexpected] Expressions in idFilters are all equi-property with property m_idProperty");
@@ -882,7 +1143,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
     }
 
     const char*msg{};
-    if(auto res = sqlite3_exec(s.str(), [](void *p_queryInfo, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(s.str(), [](void *p_queryInfo, int argc, Value *argv, char **column) {
       const auto t1 = std::chrono::system_clock::now();
       
       auto & queryInfo = *static_cast<RelationshipQueryInfo*>(p_queryInfo);
@@ -894,8 +1155,8 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
         if(indexID.has_value() || indexType.has_value())
         {
           queryInfo.candidateRows[i].push_back(IDAndType{
-            indexID.has_value() ? argv[*indexID] : std::string{},
-            indexType.has_value() ? static_cast<size_t>(std::atoll(argv[*indexType])) : 0ull
+            indexID.has_value() ? std::get<ID>(argv[*indexID]) : ID{},
+            indexType.has_value() ? std::get<int64_t>(argv[*indexType]) : c_noType
           });
         }
       }
@@ -914,8 +1175,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
   // indexed by varToVarIdx[var]
   std::vector<std::vector<PropertyKeyName>> strPropertiesByVar(countDistinctVariables);
   // indexed by varToVarIdx[var]
-  std::vector<std::unordered_map<ID, std::vector<std::optional<std::string>>>> propertiesByVar(countDistinctVariables);
-
+  std::vector<std::unordered_map<ID, std::vector<Value>>> propertiesByVar(countDistinctVariables);
   {
     const auto endElementType = getEndElementType();
     // indexed by element type
@@ -933,7 +1193,11 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
         for(auto & v : elementsByType)
           v.clear();
         for(const auto & idAndType : candidateRow)
+        {
+          if(idAndType.type == c_noType)
+            continue;
           elementsByType[idAndType.type].insert(idAndType.id);
+        }
         // TODO: when we query the same labeled entity/relationship property tables for several variables,
         // instead of doing several queries we should do a single UNION ALL query
         // with an extra column containing the index of the variable.
@@ -951,8 +1215,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
   // indexed by varToVarIdx[var]
   VecValues vecValues(countDistinctVariables);
   std::vector<const std::vector<ReturnClauseTerm>*> vecReturnClauses(countDistinctVariables);
-  std::vector<size_t> countReturnedPropsByVar(countDistinctVariables);
-  std::vector<std::vector<std::optional<std::string>>> propertyValues(countDistinctVariables);
+  std::vector<std::vector<Value>> propertyValues(countDistinctVariables);
   std::vector<bool> varOnlyReturnsId(countDistinctVariables);
   std::vector<bool> lookupProperties(countDistinctVariables);
 
@@ -960,8 +1223,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
   {
     const size_t i = varToVarIdx[var];
     vecReturnClauses[i] = &returnedProperties;
-    countReturnedPropsByVar[i] = returnedProperties.size();
-    propertyValues[i] = std::vector<std::optional<std::string>>{returnedProperties.size()};
+    propertyValues[i].resize(returnedProperties.size());
     vecValues[i] = &propertyValues[i];
 
     const auto & info = varInfo[var];
@@ -974,7 +1236,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
       if(returnedProperties.empty())
         throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo && lookupNodesProperties but has no id property returned.");
       for(const auto & p : returnedProperties)
-        if(p.propertyName != m_idProperty)
+        if(p.propertyName != m_idProperty.name)
           throw std::logic_error("[Unexpected] !nodeNeedsTypeInfo but has some non-id property returned.");
     }
   }
@@ -1054,10 +1316,10 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
 
     const ResultOrder m_resultsOrder;
     const VecColumnNames m_vecColumnNames;
-    std::vector<std::optional<std::string>> m_values;
+    std::vector<Value> m_values;
     const FuncResults& m_f;
     const std::vector<Variable> m_orderedVariables;
-    const std::vector<const std::vector<std::optional<std::string>>*> m_vecValues;
+    const std::vector<const std::vector<Value>*> m_vecValues;
   } results {
     computeResultOrder({&returnClauseTerms}),
     {&propertyNames},
@@ -1110,13 +1372,10 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
     if(limit.has_value())
       req += " LIMIT " + std::to_string(limit->maxCountRows);
     const char*msg{};
-    if(auto res = sqlite3_exec(req, [](void *p_results, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(req, [](void *p_results, int argc, Value *argv, char **column) {
       auto & results = *static_cast<Results*>(p_results);
       for(int i=0; i<argc; ++i)
-      {
-        auto * arg = argv[i];
-        results.m_values[i] = arg ? std::optional{std::string{arg}} : std::nullopt;
-      }
+        results.m_values[i] = std::move(argv[i]);
       results.m_f(results.m_resultsOrder, results.m_orderedVariables, results.m_vecColumnNames, results.m_vecValues);
       return 0;
     }, &results, &msg, sqlVars))
@@ -1162,7 +1421,7 @@ void GraphDB::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
     {
       // 'expressions' use 2 or more variables
       
-      if(countPropertiesNotEqual(m_idProperty, varsAndProperties) > 0)
+      if(countPropertiesNotEqual(m_idProperty.name, varsAndProperties) > 0)
         // At least one non-id property is used.
         // We could support this in the future by evaluating these expressions at the end
         // of this function when returning the results.
@@ -1174,7 +1433,7 @@ void GraphDB::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
     else if(varsAndProperties.size() == 1)
     {
       // 'expressions' uses a single variable
-      if(countPropertiesNotEqual(m_idProperty, varsAndProperties) > 0)
+      if(countPropertiesNotEqual(m_idProperty.name, varsAndProperties) > 0)
       {
         // At least one non-id property is used.
         VariablePostFilters & postFiltersForVar = postFilters[varsAndProperties.begin()->first];
@@ -1182,7 +1441,7 @@ void GraphDB::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
           postFiltersForVar.properties.insert(property);
         postFiltersForVar.filters.insert(postFiltersForVar.filters.end(), expressions.begin(), expressions.end());
       }
-      else if(varsAndProperties.begin()->second.count(m_idProperty))
+      else if(varsAndProperties.begin()->second.count(m_idProperty.name))
       {
         // only id properties are used
         idFilters.insert(idFilters.end(), expressions.begin(), expressions.end());
@@ -1205,7 +1464,7 @@ bool GraphDB::varRequiresTypeInfo(const Variable& var,
   // (unless these properties are not valid for the property table but this will be checked later,
   //  once we know the type of the element)
   for(const auto & p : returnedProperties)
-    if(p.propertyName != m_idProperty)
+    if(p.propertyName != m_idProperty.name)
       return true;
   
   // If there are some constraints on non-id properties,
@@ -1217,7 +1476,7 @@ bool GraphDB::varRequiresTypeInfo(const Variable& var,
     // Sanity check
     bool hasNonIdProperty{};
     for(const auto & prop : it->second.properties)
-      if(prop != m_idProperty)
+      if(prop != m_idProperty.name)
       {
         hasNonIdProperty = true;
         break;
@@ -1256,14 +1515,13 @@ std::string GraphDB::mkFilterTypesConstraint(const std::set<size_t>& typesFilter
 // In this query, age is either an int property or a string property:
 // MATCH (a)-[r]->(b) WHERE id(b) IN (...) RETURN a.age
 // We should probably use different queries instead of a UNION ALL approach then.
-template<typename ElementIDsContainer>
 void GraphDB::gatherPropertyValues(const Variable& var,
                                    // indexed by element type
-                                   const std::vector<ElementIDsContainer>& elemsByType,
+                                   const std::vector<std::unordered_set<ID>>& elemsByType,
                                    const Element elem,
-                                   const std::vector<PropertyKeyName>& strProperties,
+                                   const std::vector<PropertyKeyName>& propertyNames,
                                    const std::map<Variable, VariablePostFilters>& postFilters,
-                                   std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties) const
+                                   std::unordered_map<ID, std::vector<Value>>& properties) const
 {
   bool firstOutter = true;
   std::ostringstream s;
@@ -1285,7 +1543,7 @@ void GraphDB::gatherPropertyValues(const Variable& var,
     : *m_indexedRelationshipTypes.getIfExists(typeIdx);
     
     std::vector<bool> validProperty;
-    if(!findValidProperties(label, strProperties, validProperty))
+    if(!findValidProperties(label, propertyNames, validProperty))
       throw std::logic_error("[Unexpected] Label does not exist.");
     std::string sqlFilter{};
     
@@ -1308,7 +1566,7 @@ void GraphDB::gatherPropertyValues(const Variable& var,
         {
           if(valid)
           {
-            const bool isIDProperty = strProperties[i] == m_idProperty;
+            const bool isIDProperty = propertyNames[i] == m_idProperty.name;
             if(isIDProperty)
               indicesValidIDProperties.push_back(i);
             else
@@ -1319,7 +1577,7 @@ void GraphDB::gatherPropertyValues(const Variable& var,
       }
       if(!hasValidNonIdProperty)
       {
-        const auto countProperties = strProperties.size();
+        const auto countProperties = propertyNames.size();
         // no property is valid (except id properties), and we don't do any filtering
         // so we manually compute the results.
         for(const auto & id : ids)
@@ -1340,19 +1598,19 @@ void GraphDB::gatherPropertyValues(const Variable& var,
     s << "SELECT SYS__ID";
     for(size_t i=0, sz=validProperty.size(); i<sz; ++i)
     {
-      const auto & propertyName = strProperties[i];
+      const auto & propertyName = propertyNames[i];
       s << ", ";
       if(!validProperty[i])
         s << "NULL as ";
       s << propertyName;
     }
     s << " FROM " << label;
-    
-    std::vector<int64_t> vIdsSigned;
-    vIdsSigned.reserve(ids.size());
+
+    auto vecIds = std::make_shared<std::vector<ID>>();
+    vecIds->reserve(ids.size());
     for(const auto & id : ids)
-      vIdsSigned.push_back(strToInt64(id));
-    s << " WHERE SYS__ID IN " << sqlVars.addVar(std::move(vIdsSigned));
+      vecIds->push_back(id);
+    s << " WHERE SYS__ID IN " << sqlVars.addVar(std::move(vecIds));
     if(!sqlFilter.empty())
       s << " AND " << sqlFilter;
   }
@@ -1362,20 +1620,17 @@ void GraphDB::gatherPropertyValues(const Variable& var,
   {
     struct QueryData{
       std::chrono::steady_clock::duration& totalPropertyTablesCbDuration;
-      std::unordered_map<ID, std::vector<std::optional<std::string>>> & properties;
+      std::unordered_map<ID, std::vector<Value>> & properties;
     } queryData{m_totalPropertyTablesCbDuration, properties};
     
-    if(auto res = sqlite3_exec(queryStr.c_str(), [](void *p_queryData, int argc, char **argv, char **column) {
+    if(auto res = sqlite3_exec(queryStr.c_str(), [](void *p_queryData, int argc, Value *argv, char **column) {
       const auto t1 = std::chrono::system_clock::now();
       
       auto & queryData = *static_cast<QueryData*>(p_queryData);
       {
-        auto & props = queryData.properties[argv[0]];
+        auto & props = queryData.properties[std::get<ID>(argv[0])];
         for(int i=1; i<argc; ++i)
-        {
-          auto * arg = argv[i];
-          props.push_back(arg ? std::optional{std::string{arg}} : std::nullopt);
-        }
+          props.push_back(std::move(argv[i]));
       }
       
       const auto duration = std::chrono::system_clock::now() - t1;
@@ -1399,7 +1654,7 @@ size_t GraphDB::getEndElementType() const
 }
 
 int GraphDB::sqlite3_exec(const std::string& queryStr,
-                          int (*callback)(void*,int,char**,char**),
+                          int (*callback)(void*, int, Value*, char**),
                           void * cbParam,
                           const char **errmsg,
                           const sql::QueryVars& sqlVars) const
@@ -1420,7 +1675,7 @@ int GraphDB::sqlite3_exec(const std::string& queryStr,
 
 int GraphDB::sqlite3_exec_notime(const std::string& queryStr,
                                  const sql::QueryVars& sqlVars,
-                                 int (*callback)(void*,int,char**,char**),
+                                 int (*callback)(void*, int, Value*, char**),
                                  void * cbParam,
                                  const char **errmsg) const
 {

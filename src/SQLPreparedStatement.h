@@ -3,7 +3,9 @@
 #include "sqlite3.h"
 #include "SqlAST.h"
 
+#include "Value.h"
 #include <string>
+
 
 
 struct SQLBoundVarIndex
@@ -28,12 +30,13 @@ struct SQLPreparedStatement{
   int prepare(sqlite3* db, const std::string& queryStr);
 
   // |sqliteIndex| starts at 1
-  void bindVariable(int sqliteIndex, const std::string& value) const;
-  void bindVariable(int sqliteIndex, int64_t value) const;
+  void bindVariable(int sqliteIndex, Value const& value) const;
   void bindVariables(const sql::QueryVars& sqlVars) const;
   void reset();
 
-  int run(int (*callback)(void*,int,char**,char**),
+  // if propertyTypes is not null, it contains the type of each column.
+  // When propertyTypes is null, all values are converted to strings.
+  int run(int (*callback)(void*,int, Value*,char**),
           void * cbParam,
           const char **errmsg);
   ~SQLPreparedStatement();
@@ -46,7 +49,7 @@ private:
 
   int m_nCols;
   
-  std::vector<const char*> m_rowResults;
+  std::vector<Value> m_rowResults;
   std::vector<const char*> m_colNames;
 
   int countColumns() const { return m_nCols; }
@@ -57,9 +60,32 @@ private:
   {
     return sqlite3_column_name(m_stmt, i);
   }
-  const unsigned char* column_text(int i)
+  Value columnToValue(int i)
   {
-    return sqlite3_column_text(m_stmt, i);
+    const auto type = sqlite3_column_type(m_stmt, i);
+    switch(type)
+    {
+      case SQLITE_NULL:
+        return Nothing{};
+      case SQLITE_INTEGER:
+        return sqlite3_column_int64(m_stmt, i);
+      case SQLITE_FLOAT:
+        return sqlite3_column_double(m_stmt, i);
+      case SQLITE_TEXT:
+      {
+        const auto * s = sqlite3_column_text(m_stmt, i);
+        const int sz = sqlite3_column_bytes(m_stmt, i);
+        return StringPtr::fromCStrAndCountBytes(s, sz);
+      }
+      case SQLITE_BLOB:
+      {
+        const auto * b = sqlite3_column_blob(m_stmt, i);
+        const int sz = sqlite3_column_bytes(m_stmt, i);
+        return ByteArrayPtr::fromByteArray(b, sz);
+      }
+      default:
+        throw std::logic_error("unexpected column type " + std::to_string(type));
+    }
   }
-  
+
 };

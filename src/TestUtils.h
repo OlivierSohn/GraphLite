@@ -3,13 +3,168 @@
 #include <chrono>
 #include <random>
 #include <filesystem>
+#include <type_traits>
 
 #include "GraphDBSqlite.h"
 #include "CypherQuery.h"
 #include "Logs.h"
 
+
+inline constexpr auto
+operator == ( const Nothing& a, const Nothing& b )
+{
+  return true;
+}
+inline constexpr auto
+operator < ( const Nothing& a, const Nothing& b )
+{
+  return false;
+}
+
+inline constexpr auto
+operator < ( const StringPtr& a, const StringPtr& b )
+{
+  if(static_cast<bool>(a.string) < static_cast<bool>(b.string))
+    return true;
+  if(static_cast<bool>(a.string) > static_cast<bool>(b.string))
+    return false;
+  if(a.string)
+  {
+    if(a.m_bufSz < b.m_bufSz)
+      return true;
+    if(a.m_bufSz > b.m_bufSz)
+      return false;
+    for(size_t i{}; i<a.m_bufSz; ++i)
+    {
+      if(a.string[i] < b.string[i])
+        return true;
+      if(a.string[i] > b.string[i])
+        return false;
+    }
+  }
+  // a == b
+  return false;
+}
+
+inline constexpr auto
+operator == ( const StringPtr& a, const StringPtr& b )
+{
+  return !(a < b) && !(b < a);
+}
+
+inline constexpr auto
+operator < ( const ByteArrayPtr& a, const ByteArrayPtr& b )
+{
+  if(static_cast<bool>(a.bytes) < static_cast<bool>(b.bytes))
+    return true;
+  if(static_cast<bool>(a.bytes) > static_cast<bool>(b.bytes))
+    return false;
+  if(a.bytes)
+  {
+    if(a.m_bufSz < b.m_bufSz)
+      return true;
+    if(a.m_bufSz > b.m_bufSz)
+      return false;
+    for(size_t i{}; i<a.m_bufSz; ++i)
+    {
+      if(a.bytes[i] < b.bytes[i])
+        return true;
+      if(a.bytes[i] > b.bytes[i])
+        return false;
+    }
+  }
+  // a == b
+  return false;
+}
+
+inline constexpr auto
+operator == ( const ByteArrayPtr& a, const ByteArrayPtr& b )
+{
+  return !(a < b) && !(b < a);
+}
+
+inline auto
+operator == ( const Value& v, const Nothing n )
+{
+  return v == Value{n};
+}
+
+inline auto
+operator < ( const Value& v, const Nothing n )
+{
+  return v < Value{n};
+}
+
+inline auto
+operator == ( const Value& v, const int64_t i )
+{
+  return v == Value{i};
+}
+
+inline auto
+operator < ( const Value& v, const int64_t i )
+{
+  return v < Value{i};
+}
+
+inline auto
+operator == ( const Value& v, const double d)
+{
+  return v == Value{d};
+}
+
+inline auto
+operator < ( const Value& v, const double d)
+{
+  return v < Value{d};
+}
+
+inline auto
+operator == (const Value& v, const char* str)
+{
+  return v == Value{StringPtr::fromCStr(str)};
+}
+
+
+
 namespace openCypher::test
 {
+
+template<typename T, typename Variant>
+struct isVariantMember;
+
+template<typename T, typename... TypesInVariant>
+struct isVariantMember<T, std::variant<TypesInVariant...>>
+: public std::disjunction<std::is_same<T, TypesInVariant>...> {};
+
+template<typename T, typename U = std::enable_if_t<isVariantMember<T, Value>::value>>
+std::set<std::vector<Value>> toValues(std::set<std::vector<T>> && s)
+{
+  std::set<std::vector<Value>> res;
+  for(const auto & v : s)
+  {
+    std::vector<Value> vv;
+    for(const auto & e : v)
+      vv.push_back(Value(std::move(e)));
+    res.insert(std::move(vv));
+  }
+  return res;
+}
+
+template<typename T, typename U = std::enable_if_t<isVariantMember<T, Value>::value>>
+std::set<Value> mkSet(std::initializer_list<T>&& values)
+{
+  std::set<Value> res;
+  for(const auto & i : values)
+    res.emplace(i);
+  return res;
+}
+
+std::set<Value> mkSet(std::initializer_list<std::reference_wrapper<const Value>>&& values);
+
+std::set<std::vector<Value>> toSet(const std::vector<std::vector<Value>>& values);
+
+
 struct SQLQueryStat{
   std::string query;
   std::chrono::steady_clock::duration duration;
@@ -17,7 +172,7 @@ struct SQLQueryStat{
 
 struct GraphWithStats
 {
-  GraphWithStats(const std::optional<std::filesystem::path>& dbPath = std::nullopt);
+  GraphWithStats(const std::optional<std::filesystem::path>& dbPath = std::nullopt, std::optional<Overwrite> overwrite = std::nullopt);
   
   GraphDB& getDB() { return *m_graph; }
 
@@ -39,7 +194,7 @@ struct QueryResultsHandler
   
   // Runs the openCypher query |cypherQuery| with optional parameters |Params|.
   void run(const std::string &cypherQuery,
-           const std::map<SymbolicName, std::vector<std::string>>& Params = {});
+           const std::map<SymbolicName, HomogeneousNonNullableValues>& Params = {});
 
   bool printCypherAST() const { return m_printCypherAST; }
     
@@ -88,7 +243,7 @@ private:
   GraphDB::VecColumnNames m_columnNames;
   
   GraphWithStats& m_db;
-  std::vector<std::vector<std::optional<std::string>>> m_rows;
+  std::vector<std::vector<Value>> m_rows;
 };
 
 }

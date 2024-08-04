@@ -494,7 +494,7 @@ TEST(Test, Perfs2)
 
   // Here we assume that the id is 1 for the first node, 2 for the second, etc...
   // This is how sqlite auto increment "integer primary key" column works.
-  auto expectedRootNodeId{std::to_string(1 + rootNodeIdx)};
+  const ID expectedRootNodeId{static_cast<ID>(1ull + rootNodeIdx)};
 
   auto & db = dbWrapper->getDB();
   if(!db.typesAndProperties().empty())
@@ -522,9 +522,10 @@ TEST(Test, Perfs2)
     {
       std::cout << i << "." << std::flush;
       db.beginTransaction();
-      for(size_t i=0; i<maxAge; ++i)
+      for(int64_t i=0; i<maxAge; ++i)
       {
-        nodeIds.push_back(db.addNode("Person", {{p_age, std::to_string(i)}}));
+        nodeIds.push_back(db.addNode("Person",
+                                     mkVec(std::pair{p_age, Value{i}})));
         if(nodeIds.size() == countNodes)
           break;
       }
@@ -571,15 +572,21 @@ TEST(Test, Perfs2)
     {
       std::cout << i << "." << std::flush;
       db.beginTransaction();
-      for(size_t i=0; i<4000; ++i)
+      for(int64_t i=0; i<4000; ++i)
       {
         if(relIdx == rels.size())
           break;
-        db.addRelationship("Knows", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(i)}});
+        db.addRelationship("Knows",
+                           nodeIds[rels[relIdx].first],
+                           nodeIds[rels[relIdx].second],
+                           mkVec(std::pair{p_since, Value(i)}));
         ++relIdx;
         if(relIdx == rels.size())
           break;
-        db.addRelationship("WorksWith", nodeIds[rels[relIdx].first], nodeIds[rels[relIdx].second], {{p_since, std::to_string(2 * i)}});
+        db.addRelationship("WorksWith",
+                           nodeIds[rels[relIdx].first],
+                           nodeIds[rels[relIdx].second],
+                           mkVec(std::pair{p_since, Value(2 * i)}));
         ++relIdx;
       }
       db.endTransaction();
@@ -596,7 +603,7 @@ TEST(Test, Perfs2)
   //dbWrapper->m_printSQLRequests = true;
   //handler.m_printCypherAST = true;
 
-  std::unordered_set<std::string> nodeVisisted;
+  std::unordered_set<ID> nodeVisisted;
   nodeVisisted.reserve(countNodes);
   
   struct Stats{
@@ -615,15 +622,16 @@ TEST(Test, Perfs2)
   };
   std::vector<Stats> stats;
   
-  std::vector<std::string> expandFronteer{expectedRootNodeId};
+  auto expandFronteer = std::make_shared<std::vector<ID>>();
+  expandFronteer->push_back(expectedRootNodeId);
   for(;;)
   {
-    if(expandFronteer.empty())
+    if(expandFronteer->empty())
       break;
-    std::cout << "Expanding " << expandFronteer.size() << " nodes." << std::endl;
+    std::cout << "Expanding " << expandFronteer->size() << " nodes." << std::endl;
     std::ostringstream s;
     bool first = true;
-    for(const auto & id : expandFronteer)
+    for(const auto & id : *expandFronteer)
     {
       if(first)
         first = false;
@@ -645,21 +653,20 @@ TEST(Test, Perfs2)
     
     auto & st = stats.emplace_back();
     st.countRowsFetched = handler.countRows();
-    st.countStartNodes = expandFronteer.size();
+    st.countStartNodes = expandFronteer->size();
     st.timeCypher = handler.m_cypherQueryDuration;
     st.timeSQL = handler.m_sqlQueriesExecutionDuration;
     st.timeSQLRelCb = handler.m_sqlRelCbDuration;
     st.timeSQLPropCb = handler.m_sqlPropCbDuration;
     st.queryStats = dbWrapper->m_queryStats;
 
-    expandFronteer.clear();
+    expandFronteer->clear();
     
     for(const auto & row : handler.rows())
     {
-      ASSERT_TRUE(row[0].has_value());
-      const auto inserted = nodeVisisted.insert(*row[0]).second;
+      const auto inserted = nodeVisisted.insert(std::get<ID>(row[0])).second;
       if(inserted)
-        expandFronteer.push_back(*row[0]);
+        expandFronteer->push_back(std::get<ID>(row[0]));
       else
       {
         // Do nothing, we have already visited this node.

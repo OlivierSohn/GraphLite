@@ -17,6 +17,27 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
+#include <type_traits>
+
+
+template <typename T, typename...U>
+using is_all_same = std::integral_constant<bool, (... && std::is_same_v<T,U>)>;
+
+// This is useful to initialize a vector with some non move-only elements.
+//
+template<typename T, std::size_t N>
+auto mkVec( std::array<T,N>&& a )
+-> std::vector<T>
+{
+  return { std::make_move_iterator(std::begin(a)),
+    std::make_move_iterator(std::end(a)) };
+}
+template<typename U, typename... T>
+auto mkVec( U&&u, T&& ... t ) -> std::enable_if_t<is_all_same<U, T...>::value, std::vector<U>>
+{
+  return mkVec( std::to_array({ std::forward<U>(u), std::forward<T>(t)... }) );
+}
+
 
 
 template<typename Index>
@@ -57,9 +78,31 @@ private:
 };
 
 // Node and relationship IDs.
-// Internally they are converted to int64 so if the string doesn't represent an int64
-// there will be exceptions thrown.
-using ID = std::string;
+using ID = int64_t;
+
+template<typename T>
+struct Traits;
+
+template<>
+struct Traits<int64_t>
+{
+  static constexpr auto correspondingValueType = ValueType::Integer;
+};
+template<>
+struct Traits<double>
+{
+  static constexpr auto correspondingValueType = ValueType::Float;
+};
+template<>
+struct Traits<StringPtr>
+{
+  static constexpr auto correspondingValueType = ValueType::String;
+};
+template<>
+struct Traits<ByteArrayPtr>
+{
+  static constexpr auto correspondingValueType = ValueType::ByteArray;
+};
 
 enum class Element{
   Node,
@@ -87,6 +130,7 @@ struct PathPatternElement
   std::vector<std::string> labels;
 };
 
+enum class Overwrite{Yes, No};
 
 struct GraphDB
 {
@@ -97,38 +141,40 @@ struct GraphDB
   using PropertyKeyName = openCypher::PropertyKeyName;
   using TraversalDirection = openCypher::TraversalDirection;
   using ExpressionsByVarAndProperties = openCypher::ExpressionsByVarAndProperties;
-  
+
   // Contains information to order results in the same order as they were specified in the return clause.
   using ResultOrder = std::vector<std::pair<
   unsigned /* i = index into VecValues, VecColumnNames*/,
   unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
   
   using VecColumnNames = std::vector<const std::vector<PropertyKeyName>*>;
-  using VecValues = std::vector<const std::vector<std::optional<std::string>>*>;
+  using VecValues = std::vector<const std::vector<Value>*>;
   
   using FuncResults = std::function<void(const ResultOrder&, const std::vector<Variable>&, const VecColumnNames&, const VecValues&)>;
   
   using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
   using FuncOnSQLQueryDuration = std::function<void(const std::chrono::steady_clock::duration)>;
-  using FuncOnDBDiagnosticContent = std::function<void(int argc, char **argv, char **column)>;
+  using FuncOnDBDiagnosticContent = std::function<void(int argc, Value *argv, char **column)>;
   
   static constexpr const char* c_defaultDBPath{"default.sqlite3db"};
 
-  // If |dbPath| has no value or points to a non-existing DB file,
-  //   we create (overwrite) the DB at the default location c_defaultDBPath and create system tables in it.
-  // Else (i.e when |dbPath| has a value and points to an existing DB file),
-  //   we preserve the existing DB file and infer the graph schema from the tables of the existing DB file.
+  // @param dbPath : DB file path. If this parameter is std::nullopt, the DB file path is c_defaultDBPath.
+  // @param overwrite :
+  //   when |overwrite| is std::nullopt, the DB file is overwritten iff |dbPath| is std::nullopt
+  //   when |overwrite| is NOT std::nullopt, the DB file is overwritten iff *overwrite == Overwrite::Yes
+  //   Note: If the DB file is not overwritten, we infer the graph schema from it.
   GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
           const FuncOnSQLQueryDuration& fOnSQLQueryDuration,
           const FuncOnDBDiagnosticContent& fOnDiagnostic,
-          const std::optional<std::filesystem::path>& dbPath = std::nullopt);
+          const std::optional<std::filesystem::path>& dbPath = std::nullopt,
+          const std::optional<Overwrite> overwrite = std::nullopt);
   ~GraphDB();
   
   // Creates a sql table.
   // todo support typed properties.
   void addType(std::string const& typeName,
                bool isNode,
-               std::vector<PropertyKeyName> const& properties);
+               std::vector<PropertySchema> const& properties);
   
   // When doing several inserts, it is best to have a transaction for many inserts.
   // TODO redesign API to remove this.
@@ -136,16 +182,16 @@ struct GraphDB
   void endTransaction();
   
   ID addNode(const std::string& type,
-             const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
+             const std::vector<std::pair<PropertyKeyName, Value>>& propValues);
   ID addRelationship(const std::string& type,
                      const ID& originEntity,
                      const ID& destinationEntity,
-                     const std::vector<std::pair<PropertyKeyName, std::string>>& propValues,
+                     const std::vector<std::pair<PropertyKeyName, Value>>& propValues,
                      bool verifyNodesExist=false);
   
   // The property of entities and relationships that represents their ID.
   // It is a "system" property.
-  PropertyKeyName const & idProperty() const { return m_idProperty; }
+  PropertySchema const & idProperty() const { return m_idProperty; }
   
   // |labels| is the list of possible labels. When empty, all labels are allowed.
   void forEachElementPropertyWithLabelsIn(const Variable& var,
@@ -179,13 +225,16 @@ struct GraphDB
   const auto& typesAndProperties() const { return m_properties; }
 
 private:
-  PropertyKeyName m_idProperty{openCypher::mkProperty("SYS__ID")};
+  PropertySchema m_idProperty{openCypher::mkProperty("SYS__ID"), Traits<ID>::correspondingValueType};
   
   sqlite3* m_db{};
   IndexedTypes<size_t> m_indexedNodeTypes;
   IndexedTypes<size_t> m_indexedRelationshipTypes;
+  // auto-increment integer table columns start at 1 in sqlite.
+  static constexpr size_t c_noType = 0ull;
+
   // key : namedType.
-  std::unordered_map<std::string, std::set<PropertyKeyName>> m_properties;
+  std::unordered_map<std::string, std::set<PropertySchema>> m_properties;
   
   const FuncOnSQLQuery m_fOnSQLQuery;
   const FuncOnSQLQueryDuration m_fOnSQLQueryDuration;
@@ -200,15 +249,15 @@ private:
   std::vector<std::string> computeLabels(const Element, const std::vector<std::string>& inputLabels) const;
   std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
   
-  [[nodiscard]]
-  bool prepareProperties(const std::string& typeName, const std::vector<std::pair<PropertyKeyName, std::string>>& propValues, std::vector<PropertyKeyName>& propertyNames, std::vector<std::string>& propertyValues);
+  void validatePropertyValues(const std::string& typeName,
+                              const std::vector<std::pair<PropertyKeyName, Value>>& propValues) const;
   
   [[nodiscard]]
   bool findValidProperties(const std::string& typeName, const std::vector<PropertyKeyName>& propNames, std::vector<bool>& valid) const;
   
   void addElement(const std::string& typeName,
                   const ID& id,
-                  const std::vector<std::pair<PropertyKeyName, std::string>>& propValues);
+                  const std::vector<std::pair<PropertyKeyName, Value>>& propValues);
   
   static ResultOrder computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses);
   
@@ -231,42 +280,50 @@ private:
   std::optional<std::set<size_t>> computeTypeFilter(const Element e, std::vector<std::string> const & nodeLabelsStr);
   
   static std::string mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn);
-  
-  template<typename ElementIDsContainer>
+
   void gatherPropertyValues(const Variable& var,
-                            const std::vector<ElementIDsContainer>& elemsByType,
+                            const std::vector<std::unordered_set<ID>>& elemsByType,
                             const Element elem,
-                            const std::vector<PropertyKeyName>& strProperties,
+                            const std::vector<PropertyKeyName>& propertyNames,
                             const std::map<Variable, VariablePostFilters>& postFilters,
-                            std::unordered_map<ID, std::vector<std::optional<std::string>>>& properties) const;
+                            std::unordered_map<ID, std::vector<Value>>& properties) const;
   
   // this method is timed
   int sqlite3_exec(const std::string& queryStr,
-                   int (*callback)(void*,int,char**,char**),
+                   int (*callback)(void*, int, Value*, char**),
                    void *,
                    const char **errmsg,
                    const sql::QueryVars& sqlVars = {}) const;
   
   int sqlite3_exec_notime(const std::string& queryStr,
                           const sql::QueryVars& arrayVariables,
-                          int (*callback)(void*,int,char**,char**),
+                          int (*callback)(void*, int, Value*, char**),
                           void *,
                           const char **errmsg) const;
   
   std::unique_ptr<SQLPreparedStatement> sqlite3_prepare(const std::string& queryStr);
-  int sqlite3_step(int (*callback)(void*,int,char**,char**),
+  int sqlite3_step(int (*callback)(void*, int, Value*, char**),
                    void *,
                    const char **errmsg,
                    const sql::QueryVars& sqlVars = {}) const;
   
   size_t getEndElementType() const;
   
+  void runVolatileStatement(auto && buildQueryString,
+                            auto && bindVars,
+                            int (*callback)(void*, int, Value*, char**) = nullptr,
+                            void * cbParam = nullptr)
+  {
+    std::map<int, std::unique_ptr<SQLPreparedStatement>> map;
+    runCachedStatement(map, 0, buildQueryString, bindVars, callback, cbParam);
+  }
+
   template<typename PreparedStatementKey>
   void runCachedStatement(std::map<PreparedStatementKey, std::unique_ptr<SQLPreparedStatement>>& cachedStatements,
                           PreparedStatementKey && key,
                           auto && buildQueryString,
                           auto && bindVars,
-                          int (*callback)(void*,int,char**,char**) = nullptr,
+                          int (*callback)(void*, int, Value*, char**) = nullptr,
                           void * cbParam = nullptr)
   {
     auto it = cachedStatements.find(key);
@@ -280,7 +337,7 @@ private:
   void runCachedStatement(std::unique_ptr<SQLPreparedStatement>& ps,
                           auto && buildQueryString,
                           auto && bindVars,
-                          int (*callback)(void*,int,char**,char**) = nullptr,
+                          int (*callback)(void*, int, Value*, char**) = nullptr,
                           void * cbParam = nullptr)
   {
     if(!ps)
@@ -304,7 +361,7 @@ private:
   }
 
   void runPreparedStatement(SQLPreparedStatement& ps, auto && bindVars,
-                            int (*callback)(void*,int,char**,char**),
+                            int (*callback)(void*, int, Value*, char**),
                             void * cbParam)
   {
     SQLBoundVarIndex var;

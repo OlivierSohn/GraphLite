@@ -320,7 +320,7 @@ std::any MyCypherVisitor::visitOC_Limit(CypherParser::OC_LimitContext *context) 
       const auto & nao = std::any_cast<NonArithmeticOperatorExpression>(res);
       if(nao.mayPropertyName.has_value())
         m_errors.push_back("OC_Limit expects a no property");
-      const auto count = strToInt64(std::get<std::string>(std::get<Literal>(nao.atom.var).variant));
+      const auto count = std::get<int64_t>(*std::get<std::shared_ptr<Value>>(std::get<Literal>(nao.atom.var).variant));
       if(count < 0)
         m_errors.push_back("OC_Limit expects a positive value");
       else
@@ -932,7 +932,7 @@ std::any MyCypherVisitor::visitOC_FunctionInvocation(CypherParser::OC_FunctionIn
   }
   NonArithmeticOperatorExpression res;
   res.atom = std::move(naoExp.atom);
-  res.mayPropertyName = m_IDProperty;
+  res.mayPropertyName = m_IDProperty.name;
   return res;
 }
 
@@ -997,29 +997,24 @@ std::any MyCypherVisitor::visitOC_Literal(CypherParser::OC_LiteralContext *conte
   if(auto *numLit = context->oC_NumberLiteral())
   {
     auto res = numLit->accept(this);
-    if(res.type() != typeid(std::string))
+    if(res.type() != typeid(std::shared_ptr<Value>))
     {
-      m_errors.push_back("OC_Literal should be a std::string");
+      m_errors.push_back("OC_Literal should be a std::shared_ptr<Value>");
       return {};
     }
-    return Literal{std::move(std::any_cast<std::string>(res))};
+    return Literal{std::move(std::any_cast<std::shared_ptr<Value>>(res))};
   }
   if(auto *listLit = context->oC_ListLiteral())
   {
     auto res = listLit->accept(this);
-    if(res.type() != typeid(std::vector<Literal>))
+    if(res.type() != typeid(HomogeneousNonNullableValues))
     {
       // Might be too restrictive though.
-      m_errors.push_back("OC_ListLiteral should be a std::vector<Literal>");
+      m_errors.push_back("OC_ListLiteral should be a HomogeneousNonNullableValues");
       return {};
     }
-    const auto & v = std::any_cast<std::vector<Literal>>(res);
-    std::vector<std::string> strings;
-    strings.reserve(v.size());
-    for(const auto & lit : v)
-      // we don't support recursive lists.
-      strings.push_back(std::get<std::string>(std::move(lit.variant)));
-    return Literal{std::move(strings)};
+    const auto & v = std::any_cast<HomogeneousNonNullableValues>(res);
+    return Literal{std::move(v)};
   }
   defaultVisit("Literal", __LINE__, context);
   m_errors.push_back("OC_Literal todo support all literals");
@@ -1029,12 +1024,28 @@ std::any MyCypherVisitor::visitOC_Literal(CypherParser::OC_LiteralContext *conte
 std::any MyCypherVisitor::visitOC_BooleanLiteral(CypherParser::OC_BooleanLiteralContext *context) { return defaultVisit("BooleanLiteral", __LINE__, context); }
 
 std::any MyCypherVisitor::visitOC_NumberLiteral(CypherParser::OC_NumberLiteralContext *context) {
-  return context->getText();
+  if(auto * p = context->oC_IntegerLiteral())
+    return p->accept(this);
+  if(auto * p = context->oC_DoubleLiteral())
+    return p->accept(this);
+  m_errors.push_back("OC_NumberLiteral expected integer or double");
+  return {};
 }
 
-std::any MyCypherVisitor::visitOC_IntegerLiteral(CypherParser::OC_IntegerLiteralContext *context) { return defaultVisit("IntegerLiteral", __LINE__, context); }
+std::any MyCypherVisitor::visitOC_IntegerLiteral(CypherParser::OC_IntegerLiteralContext *context) {
+  if(auto p = context->DecimalInteger())
+    return std::make_shared<Value>(strToInt64(context->getText()));
+  if(auto p = context->HexInteger())
+    return std::make_shared<Value>(strToInt64(context->getText().substr(2, std::string::npos), 16));
+  if(auto p = context->OctalInteger())
+    return std::make_shared<Value>(strToInt64(context->getText().substr(2, std::string::npos), 8));
+  m_errors.push_back("OC_IntegerLiteral expected decimal, hex or octal.");
+  return {};
+}
 
-std::any MyCypherVisitor::visitOC_DoubleLiteral(CypherParser::OC_DoubleLiteralContext *context) { return defaultVisit("DoubleLiteral", __LINE__, context); }
+std::any MyCypherVisitor::visitOC_DoubleLiteral(CypherParser::OC_DoubleLiteralContext *context) {
+  return std::make_shared<Value>(strToDouble(context->getText()));
+}
 
 std::any MyCypherVisitor::visitOC_ListLiteral(CypherParser::OC_ListLiteralContext *context) {
   const std::vector<CypherParser::OC_ExpressionContext*> exprs = context->oC_Expression();
@@ -1043,8 +1054,7 @@ std::any MyCypherVisitor::visitOC_ListLiteral(CypherParser::OC_ListLiteralContex
     m_errors.push_back("OC_ListLiteral Expected one or more expressions");
     return {};
   }
-  std::vector<Literal> results;
-  results.reserve(exprs.size());
+  HomogeneousNonNullableValues v;
   for(auto * expr : exprs)
   {
     auto res = expr->accept(this);
@@ -1056,7 +1066,7 @@ std::any MyCypherVisitor::visitOC_ListLiteral(CypherParser::OC_ListLiteralContex
         m_errors.push_back("OC_ListLiteral : mayPropertyName in NonArithmeticOperatorExpression is not supported");
         return {};
       }
-      results.push_back(std::get<Literal>(std::move(nao.atom.var)));
+      append(std::move(*std::get<std::shared_ptr<Value>>(std::get<Literal>(std::move(nao.atom.var)).variant)), v);
     }
     else
     {
@@ -1065,7 +1075,7 @@ std::any MyCypherVisitor::visitOC_ListLiteral(CypherParser::OC_ListLiteralContex
       return {};
     }
   }
-  return results;
+  return v;
 }
 
 std::any MyCypherVisitor::visitOC_MapLiteral(CypherParser::OC_MapLiteralContext *context) { return defaultVisit("MapLiteral", __LINE__, context); }

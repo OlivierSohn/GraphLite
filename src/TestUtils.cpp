@@ -9,7 +9,8 @@
 namespace openCypher::test
 {
 
-GraphWithStats::GraphWithStats(const std::optional<std::filesystem::path>& dbPath)
+GraphWithStats::GraphWithStats(const std::optional<std::filesystem::path>& dbPath,
+                               std::optional<Overwrite> overwrite)
 {
   auto onSQLQuery = [&](const std::string& req)
   {
@@ -41,24 +42,24 @@ GraphWithStats::GraphWithStats(const std::optional<std::filesystem::path>& dbPat
       std::cout << std::chrono::duration_cast<std::chrono::microseconds>(d).count() << " us" << std::endl;
     }
   };
-  auto onDBDiagnosticContent = [&](int argc, char **argv, char **column)
+  auto onDBDiagnosticContent = [&](int argc, Value *argv, char **column)
   {
     if(m_printSQLRequests)
     {
       auto _ = LogIndentScope{};
       std::cout << LogIndent{};
       for (int i=0; i < argc; i++)
-        printf("%s,\t", argv[i]);
-      printf("\n");
+        std::cout << argv[i] << ",\t";
+      std::cout << std::endl;
     }
     return 0;
   };
 
-  m_graph = std::make_unique<GraphDB>(onSQLQuery, onSQLQueryDuration, onDBDiagnosticContent, dbPath);
+  m_graph = std::make_unique<GraphDB>(onSQLQuery, onSQLQueryDuration, onDBDiagnosticContent, dbPath, overwrite);
 }
 
 void QueryResultsHandler::run(const std::string &cypherQuery,
-                              const std::map<SymbolicName, std::vector<std::string>>& Params)
+                              const std::map<SymbolicName, HomogeneousNonNullableValues>& Params)
 {
   m_db.m_queryStats.clear();
   
@@ -108,17 +109,41 @@ void QueryResultsHandler::onRow(const GraphDB::VecValues& values)
     auto _ = LogIndentScope();
     std::cout << LogIndent{};
     for(const auto & [i, j] : m_resultOrder)
-      std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j].value_or("<null>") << '|';
+      std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j] << '|';
     std::cout << std::endl;
   }
   auto & row = m_rows.emplace_back();
   row.reserve(m_resultOrder.size());
   for(const auto & [i, j] : m_resultOrder)
-    row.push_back((*values[i])[j]);
+    row.push_back(copy((*values[i])[j]));
 }
 
 void QueryResultsHandler::onCypherQueryEnds()
 {
   m_logIndentScope.release();
 }
+
+
+std::set<Value> mkSet(std::initializer_list<std::reference_wrapper<const Value>>&& values)
+{
+  std::set<Value> res;
+  for(const auto & i : values)
+    res.insert(copy(i));
+  return res;
+}
+
+std::set<std::vector<Value>> toSet(const std::vector<std::vector<Value>>& vecValues)
+{
+  std::set<std::vector<Value>> res;
+  for(const auto & values : vecValues)
+  {
+    std::vector<Value> v;
+    v.reserve(values.size());
+    for(const auto & val : values)
+      v.push_back(copy(val));
+    res.insert(std::move(v));
+  }
+  return res;
+}
+
 }

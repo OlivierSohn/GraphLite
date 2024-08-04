@@ -56,11 +56,11 @@ void printChart(std::ostream&,
                 std::vector<std::string> const * columnNames,
                 std::vector<std::vector<std::string>> const & values);
 
-inline int64_t strToInt64(std::string const & str)
+inline int64_t strToInt64(std::string const & str, int base = 10)
 {
   int64_t result{};
   const auto last = str.data() + str.size();
-  auto [ptr, ec] = std::from_chars(str.data(), last, result);
+  auto [ptr, ec] = std::from_chars(str.data(), last, result, base);
   
   if (ec == std::errc())
   {
@@ -73,6 +73,30 @@ inline int64_t strToInt64(std::string const & str)
     throw std::logic_error("Not an int64 string:'" + str + "'");
   else if (ec == std::errc::result_out_of_range)
     throw std::logic_error("Number is larger than int64 :'" + str + "'");
+}
+
+inline double strToDouble(std::string const & str)
+{
+  // Looks like this from_chars for floating point types is missing in the XCode c++ lib
+  // so we replace the code below by:
+  return std::stod(str);
+  /*
+  double result{};
+  const auto last = str.data() + str.size();
+  auto [ptr, ec] = std::from_chars(str.data(), last, result);
+  
+  if (ec == std::errc())
+  {
+    if(ptr == last)
+      return result;
+    else
+      throw std::logic_error("Found invalid double string:'" + str + "'");
+  }
+  else if (ec == std::errc::invalid_argument)
+    throw std::logic_error("Not an double string:'" + str + "'");
+  else if (ec == std::errc::result_out_of_range)
+    throw std::logic_error("Number is outside double :'" + str + "'");
+   */
 }
 
 struct Timer

@@ -9,9 +9,9 @@ namespace openCypher
 {
 namespace detail
 {
-SingleQuery cypherQueryToAST(const PropertyKeyName& idProperty,
+SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
                              const std::string& query,
-                             const std::map<SymbolicName, std::vector<std::string>>& queryParams,
+                             const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
                              bool printCypherAST);
 
 using FOnOrderAndColumnNames = std::function<void(const GraphDB::ResultOrder&,
@@ -27,8 +27,9 @@ void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNa
 
 template<typename ResultsHander>
 void runCypher(const std::string& cypherQuery,
-               const std::map<SymbolicName, std::vector<std::string>>& queryParams,
-               GraphDB&db, ResultsHander& resultsHandler)
+               const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
+               GraphDB&db,
+               ResultsHander& resultsHandler)
 {
   using detail::cypherQueryToAST;
   using detail::runSingleQuery;

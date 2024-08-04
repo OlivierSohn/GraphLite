@@ -11,6 +11,7 @@
 #include <any>
 
 #include "SqlAST.h"
+#include "Value.h"
 #include "Logs.h"
 
 // All types defined here my need to be refactored later as more of the openCypher grammar is supported.
@@ -22,7 +23,7 @@ using Comparison = sql::Comparison;
 struct SymbolicName
 {
   std::string str;
-
+  
   friend bool operator<(const SymbolicName&a, const SymbolicName&b)
   {
     return a.str < b.str;
@@ -115,34 +116,17 @@ struct Pattern
 // Should this inherit from Expression? in the sql AST, sql::Literal inherits from sql::Expression.
 struct Literal
 {
-  std::variant<std::string, std::vector<std::string>> variant;
+  std::variant<std::shared_ptr<Value>, HomogeneousNonNullableValues> variant;
   
   std::unique_ptr<sql::Expression> toSQLExpressionTree() const
   {
-    return std::visit([&](auto && arg) -> std::unique_ptr<sql::Expression> {
-      using T = std::decay_t<decltype(arg)>;
-      if constexpr (std::is_same_v<T, std::vector<std::string>>)
-      {
-        std::vector<int64_t> converted;
-        converted.reserve(arg.size());
-        for(const std::string & str : arg)
-        {
-          // For now we only support lists of integers (for integer ids).
-          converted.push_back(strToInt64(str));
-        }
-        return std::make_unique<sql::Literal>(converted);
-      }
-      else if constexpr (std::is_same_v<T, std::string>)
-        return std::make_unique<sql::Literal>(arg);
-      else
-        static_assert(c_false<T>, "non-exhaustive visitor!");
-    }, variant);
+    return std::make_unique<sql::Literal>(variant);
   }
 };
 struct PropertyKeyName
 {
   SymbolicName symbolicName;
-
+  
   friend bool operator<(const PropertyKeyName&a, const PropertyKeyName&b)
   {
     return a.symbolicName < b.symbolicName;
@@ -161,6 +145,42 @@ inline std::ostream& operator<<(std::ostream& os, const PropertyKeyName& p)
   os << p.symbolicName;
   return os;
 }
+
+} // NS
+
+enum class IsNullable{ Yes, No };
+
+struct PropertySchema
+{
+  PropertySchema(const openCypher::PropertyKeyName & name,
+                 ValueType type=ValueType::Integer,
+                 IsNullable nullable=IsNullable::Yes,
+                 std::shared_ptr<Value> defaultValue={})
+  : name(name)
+  , type(type)
+  , isNullable(nullable)
+  , defaultValue(defaultValue)
+  {}
+  
+  openCypher::PropertyKeyName name;
+  ValueType type;
+  IsNullable isNullable{IsNullable::No};
+  
+  // std::shared_ptr used here has the same semantic meaning as an std::optional.
+  // The reason we use std::shared_ptr instead of std::optional is because
+  // a 'Value' is not copyable and we want to avoid having to write a copy constructor
+  // in this class.
+  std::shared_ptr<Value> defaultValue;
+  
+  // The name is the key, i.e we cannot have two properties (for the same entity or relationship type) with the same name.
+  friend bool operator< (const PropertySchema& a, const PropertySchema& b)
+  {
+    return a.name < b.name;
+  }
+};
+
+namespace openCypher
+{
 
 using VarsAndProperties = std::map<Variable, std::set<PropertyKeyName>>;
 
@@ -251,7 +271,7 @@ struct Expression
   virtual VarsAndProperties varsAndProperties() const = 0;
   // throws if the translation is not supported yet.
   virtual std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const = 0;
 };
 
@@ -366,7 +386,7 @@ struct AggregateExpression : public Expression
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     std::vector<std::unique_ptr<sql::Expression>> sqlSubExprs;
@@ -440,7 +460,7 @@ struct NonArithmeticOperatorExpression : public Expression
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     return std::visit([&](auto && arg) -> std::unique_ptr<sql::Expression> {
@@ -449,7 +469,8 @@ struct NonArithmeticOperatorExpression : public Expression
       {
         if(!mayPropertyName.has_value())
           throw std::logic_error("cannot use a raw variable in SQL, need to have a property");
-        if(0 == sqlFields.count(*mayPropertyName))
+        // The ValueType is ignored when comparing keys.
+        if(0 == sqlFields.count(PropertySchema{*mayPropertyName, ValueType::String}))
           // The property is not a SQL field so we return a null node.
           return std::make_unique<sql::Null>();
         else
@@ -509,7 +530,7 @@ struct ComparisonExpression : public Expression {
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     // At this point we can have these cases:
@@ -558,7 +579,7 @@ struct StringListNullPredicateExpression : public Expression {
   }
   
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::set<openCypher::PropertyKeyName>& sqlFields,
+  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
     std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);

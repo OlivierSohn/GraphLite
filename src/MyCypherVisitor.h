@@ -11,8 +11,8 @@ namespace openCypher
 class MyCypherVisitor : public CypherVisitor
 {
 public:
-  MyCypherVisitor(PropertyKeyName const& IDProperty,
-                  const std::map<SymbolicName, std::vector<std::string>>& queryParams,
+  MyCypherVisitor(PropertySchema const& IDProperty,
+                  const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
                   bool print = false)
   : m_print(print)
   , m_IDProperty(IDProperty)
@@ -247,8 +247,8 @@ private:
   template<typename U>
   std::any aggregate(const Aggregator a, const std::vector<U>& subExpressions);
   
-  PropertyKeyName m_IDProperty;
-  const std::map<SymbolicName, std::vector<std::string>>& m_queryParams;
+  PropertySchema const& m_IDProperty;
+  std::map<SymbolicName, HomogeneousNonNullableValues> m_queryParams;
   bool m_print;
   std::vector<std::string> m_errors;
 };

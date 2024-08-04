@@ -9,6 +9,8 @@
 #include <sstream>
 #include <map>
 
+#include "Value.h"
+
 template < typename > constexpr bool c_false = false;
 
 namespace sql
@@ -18,22 +20,18 @@ struct QueryVars
 {
   // There is a convention in sqlite to identify bound variables by their position in the query.
   // So the order of calls to this method must match the query string order.
-  std::string addVar(std::vector<int64_t> const & value)
+  std::string addVar(HomogeneousNonNullableValues const & value)
   {
     m_variables[m_nextKey] = value;
     return nextName();
   }
-  std::string addVar(std::vector<int64_t> && value)
-  {
-    m_variables[m_nextKey] = std::move(value);
-    return nextName();
-  }
-
-  const std::map<int, std::vector<int64_t>> & vars() const { return m_variables; }
+  
+  const std::map<int, HomogeneousNonNullableValues> & vars() const { return m_variables; }
   
 private:
-  // key starts at 1
-  std::map<int, std::vector<int64_t>> m_variables;
+  // key starts at 1 because of https://www.sqlite.org/c3ref/bind_blob.html:
+  // The NNN value must be between 1 and the sqlite3_limit() parameter SQLITE_LIMIT_VARIABLE_NUMBER (default value: 32766).
+  std::map<int, HomogeneousNonNullableValues> m_variables;
   int m_nextKey {1};
   
   std::string nextName()
@@ -88,30 +86,32 @@ struct Expression
 
 struct Literal : public Expression
 {
-  Literal(std::variant<std::string, std::vector<int64_t>> const& variant)
-  : variant(variant)
+  Literal(std::variant<std::shared_ptr<Value>, HomogeneousNonNullableValues> const& variant)
+  : m_variant(variant)
   {}
+
   std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
+
   void toString(std::ostream& os, QueryVars& vars) const override {
     std::visit([&](auto && arg) {
       using T = std::decay_t<decltype(arg)>;
-      if constexpr (std::is_same_v<T, std::string>)
-        os << arg;
-      else if constexpr (std::is_same_v<T, std::vector<int64_t>>)
+      if constexpr (std::is_same_v<T, std::shared_ptr<Value>>)
+        os << *arg;
+      else if constexpr (std::is_same_v<T, HomogeneousNonNullableValues>)
       {
-        // Note that using a bound variable with carray has not increased performance noticeably.
         if(!m_varName.has_value())
           m_varName = vars.addVar(arg);
         os << *m_varName;
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
-    }, variant);
+    }, m_variant);
   }
 
-  std::variant<std::string, std::vector<int64_t>> variant;
+  auto& getVariant() const { return m_variant; }
 
 private:
+  std::variant<std::shared_ptr<Value>, HomogeneousNonNullableValues> m_variant;
   mutable std::optional<std::string> m_varName;
 };
 
@@ -194,7 +194,7 @@ struct StringListNullPredicateExpression : public Expression {
     std::optional<Type> type;
     if(auto lit = dynamic_cast<Literal*>(m_right.get()))
     {
-      if(std::holds_alternative<std::vector<int64_t>>(lit->variant))
+      if(std::holds_alternative<HomogeneousNonNullableValues>(lit->getVariant()))
         type = Type::InList;
     }
     if(!type.has_value())

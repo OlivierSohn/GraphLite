@@ -1,0 +1,117 @@
+
+
+#pragma once
+
+#include <variant>
+#include <memory>
+#include <cstring>
+#include <exception>
+#include <ostream>
+
+#ifdef _WIN32
+struct iovec {
+  void *iov_base;
+  size_t iov_len;
+};
+#else
+# include <sys/uio.h>
+#endif
+
+
+enum class ValueType
+{
+  ByteArray,
+  String,
+  Integer,
+  Float
+};
+
+struct Nothing{
+};
+
+// TODO: provide a SmallString type for strings up to 7 characters .
+
+// UTF8 string
+struct StringPtr{
+  StringPtr() = default;
+
+  StringPtr(std::unique_ptr<char[]> && s, size_t bufSz)
+  : string(std::move(s))
+  , m_bufSz(bufSz)
+  {}
+
+  StringPtr(StringPtr&&) noexcept = default;
+  StringPtr& operator=(StringPtr&&) noexcept = default;
+
+  // null terminated
+  std::unique_ptr<char[]> string;
+  size_t m_bufSz{};
+  
+  static StringPtr fromCStr(const char * str);
+  static StringPtr fromCStrAndCountBytes(const unsigned char * s, const size_t sz);
+  
+  StringPtr clone() const;
+};
+
+struct ByteArrayPtr{
+  ByteArrayPtr() = default;
+
+  ByteArrayPtr(std::unique_ptr<unsigned char[]> && b, size_t bufSz)
+  : bytes(std::move(b))
+  , m_bufSz(bufSz)
+  {}
+
+  ByteArrayPtr(ByteArrayPtr&&) noexcept = default;
+  ByteArrayPtr& operator=(ByteArrayPtr&&) noexcept = default;
+
+  std::unique_ptr<unsigned char[]> bytes;
+  size_t m_bufSz{};
+  
+
+  static ByteArrayPtr fromByteArray(const void* b, const size_t sz);
+  static ByteArrayPtr fromHexStr(const std::string& str);
+  std::string toHexStr() const;
+
+  ByteArrayPtr clone() const;
+};
+
+// using StringPtr results in a variant of size 16
+// using std::string results in a variant of size 32 (and may depend on the C++ library used)
+using Value = std::variant<Nothing, double, int64_t, StringPtr, ByteArrayPtr>;
+
+Value copy(Value const & v);
+
+std::ostream & operator <<(std::ostream& os, const Value & v);
+
+struct ByteArrays
+{
+  void push_back(ByteArrayPtr && v)
+  {
+    iovecs.push_back(iovec{v.bytes.get(), v.m_bufSz});
+    arrays.push_back(std::move(v.bytes));
+  }
+  std::vector<std::unique_ptr<unsigned char[]>> arrays;
+  std::vector<iovec> iovecs; // this is used for binding via carray sqlite extention.
+};
+
+struct Strings
+{
+  void push_back(StringPtr && v)
+  {
+    stringsArray.push_back(v.string.get());
+    strings.push_back(std::move(v.string));
+  }
+  std::vector<std::unique_ptr<char[]>> strings;
+  std::vector<char*> stringsArray; // this is used for binding via carray sqlite extention.
+};
+
+using HomogeneousNonNullableValues = std::variant<
+std::monostate, // empty list
+std::shared_ptr<std::vector<double>>,
+std::shared_ptr<std::vector<int64_t>>,
+std::shared_ptr<Strings>, // this format is OK for binding via carray sqlite extention.
+std::shared_ptr<ByteArrays>
+>;
+
+// Will throw if v has a value and val is incompatible with this value.
+void append(Value && val, HomogeneousNonNullableValues & v);
