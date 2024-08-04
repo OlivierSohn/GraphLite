@@ -1,6 +1,7 @@
 #include "SQLPreparedStatement.h"
 #include "sqlext/carray.h"
 
+#define DEBUG_BINDINGS 1
 
 int SQLPreparedStatement::prepare(sqlite3* db, const std::string& queryStr)
 {
@@ -11,35 +12,63 @@ int SQLPreparedStatement::prepare(sqlite3* db, const std::string& queryStr)
   return res;
 }
 
+void SQLPreparedStatement::bindVariable(int sqliteIndex, const int64_t arg) const
+{
+#if DEBUG_BINDINGS
+  std::cout << "Bindings[" << sqliteIndex << "] = (int64)" << arg << std::endl;
+#endif
+  if(sqlite3_bind_int64(m_stmt, sqliteIndex, arg))
+    throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
+}
+void SQLPreparedStatement::bindVariable(int sqliteIndex, const double arg) const
+{
+#if DEBUG_BINDINGS
+  std::cout << "Bindings[" << sqliteIndex << "] = (double)" << arg << std::endl;
+#endif
+  if(sqlite3_bind_double(m_stmt, sqliteIndex, arg))
+    throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
+}
+void SQLPreparedStatement::bindVariable(int sqliteIndex, const Nothing) const
+{
+#if DEBUG_BINDINGS
+  std::cout << "Bindings[" << sqliteIndex << "] = (Nothing)" << std::endl;
+#endif
+  if(sqlite3_bind_null(m_stmt, sqliteIndex))
+    throw std::logic_error("sqlite3_bind_null: " + std::string{sqlite3_errmsg(m_db)});
+}
+void SQLPreparedStatement::bindVariable(int sqliteIndex, const StringPtr& arg) const
+{
+#if DEBUG_BINDINGS
+  std::cout << "Bindings[" << sqliteIndex << "] = (Text)" << arg.string << " length " << arg.m_bufSz << std::endl;
+#endif
+  // The 4th parameter is the position of the \0 character.
+  // The \0 character is the last character of the buffer, hence its position is m_bufSz - 1.
+  if(sqlite3_bind_text(m_stmt, sqliteIndex, arg.string.get(), static_cast<int>(arg.m_bufSz - 1), SQLITE_STATIC))
+    throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
+}
+void SQLPreparedStatement::bindVariable(int sqliteIndex, const ByteArrayPtr& arg) const
+{
+#if DEBUG_BINDINGS
+  std::cout << "Bindings[" << sqliteIndex << "] = (Blob) length " << arg.m_bufSz << std::endl;
+#endif
+  if(sqlite3_bind_blob(m_stmt, sqliteIndex, arg.bytes.get(), static_cast<int>(arg.m_bufSz), SQLITE_STATIC))
+    throw std::logic_error("sqlite3_bind_blob: " + std::string{sqlite3_errmsg(m_db)});
+}
+
 void SQLPreparedStatement::bindVariable(int sqliteIndex, Value const& value) const
 {
   std::visit([&](auto && arg) {
     using T = std::decay_t<decltype(arg)>;
     if constexpr (std::is_same_v<T, int64_t>)
-    {
-      if(sqlite3_bind_int64(m_stmt, sqliteIndex, arg))
-        throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
-    }
+      bindVariable(sqliteIndex, arg);
     else if constexpr (std::is_same_v<T, double>)
-    {
-      if(sqlite3_bind_double(m_stmt, sqliteIndex, arg))
-        throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
-    }
+      bindVariable(sqliteIndex, arg);
     else if constexpr (std::is_same_v<T, StringPtr>)
-    {
-      if(sqlite3_bind_text(m_stmt, sqliteIndex, arg.string.get(), static_cast<int>(arg.m_bufSz), SQLITE_STATIC))
-        throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
-    }
+      bindVariable(sqliteIndex, arg);
     else if constexpr (std::is_same_v<T, ByteArrayPtr>)
-    {
-      if(sqlite3_bind_blob(m_stmt, sqliteIndex, arg.bytes.get(), static_cast<int>(arg.m_bufSz), SQLITE_STATIC))
-        throw std::logic_error("sqlite3_bind_text: " + std::string{sqlite3_errmsg(m_db)});
-    }
+      bindVariable(sqliteIndex, arg);
     else if constexpr (std::is_same_v<T, Nothing>)
-    {
-      if(sqlite3_bind_null(m_stmt, sqliteIndex))
-        throw std::logic_error("sqlite3_bind_null: " + std::string{sqlite3_errmsg(m_db)});
-    }
+      bindVariable(sqliteIndex, arg);
     else
       static_assert(c_false<T>, "non-exhaustive visitor!");
   }, value);

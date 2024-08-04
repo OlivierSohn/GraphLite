@@ -47,12 +47,6 @@ operator < ( const StringPtr& a, const StringPtr& b )
 }
 
 inline constexpr auto
-operator == ( const StringPtr& a, const StringPtr& b )
-{
-  return !(a < b) && !(b < a);
-}
-
-inline constexpr auto
 operator < ( const ByteArrayPtr& a, const ByteArrayPtr& b )
 {
   if(static_cast<bool>(a.bytes) < static_cast<bool>(b.bytes))
@@ -77,10 +71,17 @@ operator < ( const ByteArrayPtr& a, const ByteArrayPtr& b )
   return false;
 }
 
-inline constexpr auto
-operator == ( const ByteArrayPtr& a, const ByteArrayPtr& b )
+
+inline auto
+operator == ( const Value& v, const ByteArrayPtr& b )
 {
-  return !(a < b) && !(b < a);
+  return v == Value{b.clone()};
+}
+
+inline auto
+operator == ( const Value& v, const StringPtr& s )
+{
+  return v == Value{s.clone()};
 }
 
 inline auto

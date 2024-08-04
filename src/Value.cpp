@@ -167,7 +167,7 @@ StringPtr StringPtr::fromCStrAndCountBytes(const unsigned char * s, const size_t
 {
   if(s)
   {
-    const auto bufSz = sz;
+    const auto bufSz = sz + 1; // + 1 for \0 character at the end.
     auto ptr = std::unique_ptr<char[]>{ new char[bufSz] };
     memcpy(ptr.get(), s, bufSz);
     return StringPtr{std::move(ptr), bufSz};
@@ -198,4 +198,36 @@ StringPtr StringPtr::clone() const
     return StringPtr{std::move(ptr), m_bufSz};
   }
   return StringPtr{};
+}
+
+bool operator == (const StringPtr& a, const StringPtr& b)
+{
+  if(static_cast<bool>(a.string) != static_cast<bool>(b.string))
+    return false;
+  if(a.string)
+  {
+    if(a.m_bufSz != b.m_bufSz)
+      return false;
+    for(size_t i{}; i<a.m_bufSz; ++i)
+      if(a.string[i] != b.string[i])
+        return false;
+  }
+  // a == b
+  return true;
+}
+
+bool operator == (const ByteArrayPtr& a, const ByteArrayPtr& b)
+{
+  if(static_cast<bool>(a.bytes) != static_cast<bool>(b.bytes))
+    return false;
+  if(a.bytes)
+  {
+    if(a.m_bufSz != b.m_bufSz)
+      return false;
+    for(size_t i{}; i<a.m_bufSz; ++i)
+      if(a.bytes[i] != b.bytes[i])
+        return false;
+  }
+  // a == b
+  return true;
 }

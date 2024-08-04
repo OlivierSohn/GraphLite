@@ -100,7 +100,11 @@ struct GraphDB
   const auto& typesAndProperties() const { return m_properties; }
 
 private:
-  PropertySchema m_idProperty{openCypher::mkProperty("SYS__ID"), Traits<ID>::correspondingValueType};
+  PropertySchema m_idProperty{
+    openCypher::mkProperty("SYS__ID"),
+    Traits<ID>::correspondingValueType,
+    IsNullable::No
+  };
   
   sqlite3* m_db{};
   IndexedTypes<size_t> m_indexedNodeTypes;
@@ -116,7 +120,9 @@ private:
   const FuncOnDBDiagnosticContent m_fOnDiagnostic;
     
   std::unique_ptr<SQLPreparedStatement> m_addRelationshipPreparedStatement;
+  std::unique_ptr<SQLPreparedStatement> m_addRelationshipWithIDPreparedStatement;
   std::unique_ptr<SQLPreparedStatement> m_addNodePreparedStatement;
+  std::unique_ptr<SQLPreparedStatement> m_addNodeWithIDPreparedStatement;
 
   using AddElementPreparedStatementKey = std::pair<std::string /* type name */, std::vector<PropertyKeyName>>;
   std::map<AddElementPreparedStatementKey, std::unique_ptr<SQLPreparedStatement>> m_addElementPreparedStatements;
@@ -157,7 +163,7 @@ private:
   static std::string mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn);
 
   void gatherPropertyValues(const Variable& var,
-                            const std::vector<std::unordered_set<ID>>& elemsByType,
+                            std::vector<std::unordered_set<ID>>&& elemsByType,
                             const Element elem,
                             const std::vector<PropertyKeyName>& propertyNames,
                             const std::map<Variable, VariablePostFilters>& postFilters,

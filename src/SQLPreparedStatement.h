@@ -31,6 +31,11 @@ struct SQLPreparedStatement{
 
   // |sqliteIndex| starts at 1
   void bindVariable(int sqliteIndex, Value const& value) const;
+  void bindVariable(int sqliteIndex, const int64_t) const;
+  void bindVariable(int sqliteIndex, const double) const;
+  void bindVariable(int sqliteIndex, const Nothing) const;
+  void bindVariable(int sqliteIndex, const StringPtr&) const;
+  void bindVariable(int sqliteIndex, const ByteArrayPtr&) const;
   void bindVariables(const sql::QueryVars& sqlVars) const;
   void reset();
 
@@ -75,6 +80,8 @@ private:
       {
         const auto * s = sqlite3_column_text(m_stmt, i);
         const int sz = sqlite3_column_bytes(m_stmt, i);
+        // sz is the number of bytes excluding the terminating character,
+        // so for "ABC", sz = 3.
         return StringPtr::fromCStrAndCountBytes(s, sz);
       }
       case SQLITE_BLOB:

@@ -51,7 +51,22 @@ struct StringPtr{
   static StringPtr fromCStrAndCountBytes(const unsigned char * s, const size_t sz);
   
   StringPtr clone() const;
+
+  friend bool operator == (const StringPtr& a, const StringPtr& b);
 };
+
+namespace std
+{
+template<>
+struct hash<StringPtr>
+{
+  size_t operator()(const StringPtr& s) const
+  {
+    return std::hash<std::string_view>()({s.string.get(), s.string.get() + s.m_bufSz});
+  }
+};
+}
+
 
 struct ByteArrayPtr{
   ByteArrayPtr() = default;
@@ -73,7 +88,26 @@ struct ByteArrayPtr{
   std::string toHexStr() const;
 
   ByteArrayPtr clone() const;
+
+  friend bool operator == (const ByteArrayPtr& a, const ByteArrayPtr& b);
 };
+
+
+namespace std
+{
+template<>
+struct hash<ByteArrayPtr>
+{
+  size_t operator()(const ByteArrayPtr& s) const
+  {
+    std::size_t seed = s.m_bufSz;
+    for(size_t i{}; i<s.m_bufSz; ++i)
+      seed ^= s.bytes[i] + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    return seed;
+  }
+};
+}
+
 
 // using StringPtr results in a variant of size 16
 // using std::string results in a variant of size 32 (and may depend on the C++ library used)
@@ -85,6 +119,11 @@ std::ostream & operator <<(std::ostream& os, const Value & v);
 
 struct ByteArrays
 {
+  void reserve(size_t sz)
+  {
+    arrays.reserve(sz);
+    iovecs.reserve(sz);
+  }
   void push_back(ByteArrayPtr && v)
   {
     iovecs.push_back(iovec{v.bytes.get(), v.m_bufSz});
@@ -96,6 +135,11 @@ struct ByteArrays
 
 struct Strings
 {
+  void reserve(size_t sz)
+  {
+    strings.reserve(sz);
+    stringsArray.reserve(sz);
+  }
   void push_back(StringPtr && v)
   {
     stringsArray.push_back(v.string.get());
@@ -112,6 +156,31 @@ std::shared_ptr<std::vector<int64_t>>,
 std::shared_ptr<Strings>, // this format is OK for binding via the carray sqlite extention.
 std::shared_ptr<ByteArrays>
 >;
+
+template<typename Value_T>
+struct CorrespondingVectorType;
+
+template<>
+struct CorrespondingVectorType<double>
+{
+  using type = std::vector<double>;
+};
+template<>
+struct CorrespondingVectorType<int64_t>
+{
+  using type = std::vector<int64_t>;
+};
+template<>
+struct CorrespondingVectorType<StringPtr>
+{
+  using type = Strings;
+};
+template<>
+struct CorrespondingVectorType<ByteArrayPtr>
+{
+  using type = ByteArrays;
+};
+
 
 // Will throw if v has a value and val is incompatible with this value.
 void append(Value && val, HomogeneousNonNullableValues & v);
@@ -140,3 +209,4 @@ struct Traits<ByteArrayPtr>
 {
   static constexpr auto correspondingValueType = ValueType::ByteArray;
 };
+

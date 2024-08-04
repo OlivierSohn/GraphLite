@@ -683,6 +683,442 @@ TEST(Test, ReturnIDs)
   EXPECT_EQ(1, handler.countSQLQueries());
 }
 
+TEST(Test, ReturnIDsString)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats<StringPtr>>();
+  
+  auto & db = dbWrapper->getDB();
+  
+  dbWrapper->m_printSQLRequests = true;
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  
+  const auto entityIDSourceExpected = StringPtr::fromCStr("idSource");
+  const auto entityIDDestinationExpected = StringPtr::fromCStr("idDest");
+  const auto entityIDRelExpected = StringPtr::fromCStr("idRel");
+
+  const auto entityIDSource = db.addNode("Person", mkVec(std::pair{db.idProperty().name, Value(entityIDSourceExpected.clone())},
+                                                         std::pair{p_age, Value(5)}));
+  ASSERT_EQ(entityIDSourceExpected, entityIDSource);
+  const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{db.idProperty().name, Value(entityIDDestinationExpected.clone())},
+                                                              std::pair{p_age, Value(10)}));
+  ASSERT_EQ(entityIDDestinationExpected, entityIDDestination);
+  const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{db.idProperty().name, Value(entityIDRelExpected.clone())},
+                                                                                                     std::pair{p_since, Value(1234)}));
+  ASSERT_EQ(entityIDRelExpected, relationshipID);
+
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n), id(n)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n), id(n), n.age, n.age");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(4, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(Value(10), handler.rows()[0][2]);
+  EXPECT_EQ(Value(10), handler.rows()[0][3]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][1]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r), id(r), r.since, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(4, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][1]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][2]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][3]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r), id(r), id(r), id(b), id(a)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(7, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r), id(r), id(r), id(b), id(a), r.since, r.since, a.age, b.age, a.age");
+  
+  ASSERT_EQ(1, handler.countRows());
+  ASSERT_EQ(12, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][7]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][8]);
+  EXPECT_EQ(Value(5), handler.rows()[0][9]);
+  EXPECT_EQ(Value(10), handler.rows()[0][10]);
+  EXPECT_EQ(Value(5), handler.rows()[0][11]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  
+  handler.run("MATCH (b)<-[r]-(a) return id(a), id(b), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (b)<-[r]-(a) return id(a), id(b), id(r), id(r), id(r), id(b), id(a)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(7, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+}
+
+
+TEST(Test, ReturnIDsBlob)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats<ByteArrayPtr>>();
+  
+  auto & db = dbWrapper->getDB();
+  
+  dbWrapper->m_printSQLRequests = true;
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+
+  std::vector<unsigned char> buf0{0,0,4,5,6,7,6,5,6,7,8,0,1,2,4,5,6,8,9,9,3,3,4,5,6,8,200, 0, 2};
+  std::vector<unsigned char> buf1{0,0,4,5,6,7,6,5,6,7,8,0,1,2,4,5,6,8,9,9,3,3,4,5,6,8,200, 0, 1};
+  std::vector<unsigned char> buf2{0,0,4,5,6,7,6,5,6,7,8,0,1,2,4,5,6,8,9,9,3,3,4,5,6,8,200, 0, 0};
+
+  const auto entityIDSourceExpected = ByteArrayPtr::fromByteArray(buf0.data(), buf0.size());
+  const auto entityIDDestinationExpected = ByteArrayPtr::fromByteArray(buf1.data(), buf1.size());
+  const auto entityIDRelExpected = ByteArrayPtr::fromByteArray(buf2.data(), buf2.size());
+  
+  const auto entityIDSource = db.addNode("Person", mkVec(std::pair{db.idProperty().name, Value(entityIDSourceExpected.clone())},
+                                                         std::pair{p_age, Value(5)}));
+  ASSERT_EQ(entityIDSourceExpected, entityIDSource);
+  const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{db.idProperty().name, Value(entityIDDestinationExpected.clone())},
+                                                              std::pair{p_age, Value(10)}));
+  ASSERT_EQ(entityIDDestinationExpected, entityIDDestination);
+  const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{db.idProperty().name, Value(entityIDRelExpected.clone())},
+                                                                                                     std::pair{p_since, Value(1234)}));
+  ASSERT_EQ(entityIDRelExpected, relationshipID);
+  
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n), id(n)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n), id(n), n.age, n.age");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(4, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(Value(10), handler.rows()[0][2]);
+  EXPECT_EQ(Value(10), handler.rows()[0][3]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][1]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r), id(r), r.since, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(4, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][1]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][2]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][3]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r), id(r), id(r), id(b), id(a)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(7, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r), id(r), id(r), id(b), id(a), r.since, r.since, a.age, b.age, a.age");
+  
+  ASSERT_EQ(1, handler.countRows());
+  ASSERT_EQ(12, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][7]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][8]);
+  EXPECT_EQ(Value(5), handler.rows()[0][9]);
+  EXPECT_EQ(Value(10), handler.rows()[0][10]);
+  EXPECT_EQ(Value(5), handler.rows()[0][11]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  
+  handler.run("MATCH (b)<-[r]-(a) return id(a), id(b), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (b)<-[r]-(a) return id(a), id(b), id(r), id(r), id(r), id(b), id(a)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(7, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+}
+
+
+TEST(Test, ReturnIDsDouble)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats<double>>();
+  
+  auto & db = dbWrapper->getDB();
+  
+  dbWrapper->m_printSQLRequests = true;
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+    
+  const auto entityIDSourceExpected = 9.9;
+  const auto entityIDDestinationExpected = 9.99;
+  const auto entityIDRelExpected = 9.999;
+  
+  const auto entityIDSource = db.addNode("Person", mkVec(std::pair{db.idProperty().name, Value(entityIDSourceExpected)},
+                                                         std::pair{p_age, Value(5)}));
+  ASSERT_EQ(entityIDSourceExpected, entityIDSource);
+  const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{db.idProperty().name, Value(entityIDDestinationExpected)},
+                                                              std::pair{p_age, Value(10)}));
+  ASSERT_EQ(entityIDDestinationExpected, entityIDDestination);
+  const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{db.idProperty().name, Value(entityIDRelExpected)},
+                                                                                                     std::pair{p_since, Value(1234)}));
+  ASSERT_EQ(entityIDRelExpected, relationshipID);
+  
+  QueryResultsHandler handler(*dbWrapper);
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n), id(n)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (n) WHERE n.age > 5 return id(n), id(n), n.age, n.age");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(4, handler.countColumns());
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(Value(10), handler.rows()[0][2]);
+  EXPECT_EQ(Value(10), handler.rows()[0][3]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(1, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(2, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][1]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH ()-[r]-() return id(r), id(r), r.since, r.since");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(4, handler.countColumns());
+  EXPECT_EQ(relationshipID, handler.rows()[0][0]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][1]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][2]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][3]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r), id(r), id(r), id(b), id(a)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(7, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (a)-[r]->(b) return id(a), id(b), id(r), id(r), id(r), id(b), id(a), r.since, r.since, a.age, b.age, a.age");
+  
+  ASSERT_EQ(1, handler.countRows());
+  ASSERT_EQ(12, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][7]);
+  EXPECT_EQ(Value(1234), handler.rows()[0][8]);
+  EXPECT_EQ(Value(5), handler.rows()[0][9]);
+  EXPECT_EQ(Value(10), handler.rows()[0][10]);
+  EXPECT_EQ(Value(5), handler.rows()[0][11]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  
+  handler.run("MATCH (b)<-[r]-(a) return id(a), id(b), id(r)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+  
+  handler.run("MATCH (b)<-[r]-(a) return id(a), id(b), id(r), id(r), id(r), id(b), id(a)");
+  
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(7, handler.countColumns());
+  EXPECT_EQ(entityIDSource, handler.rows()[0][0]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][1]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][2]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][3]);
+  EXPECT_EQ(relationshipID, handler.rows()[0][4]);
+  EXPECT_EQ(entityIDDestination, handler.rows()[0][5]);
+  EXPECT_EQ(entityIDSource, handler.rows()[0][6]);
+  EXPECT_EQ(1, handler.countSQLQueries());
+}
+
+
 TEST(Test, WhereClauses)
 {
   LogIndentScope _{};

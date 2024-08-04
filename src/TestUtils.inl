@@ -56,7 +56,11 @@ void QueryResultsHandler<ID>::run(const std::string &cypherQuery,
                               const std::map<SymbolicName, HomogeneousNonNullableValues>& Params)
 {
   m_db.m_queryStats.clear();
-  
+  m_resultOrder.clear();
+  m_variables.clear();
+  m_columnNames.clear();
+  m_rows.clear();
+
   auto sqlDuration1 = m_db.getDB().m_totalSQLQueryExecutionDuration;
   auto relCbDuration1 = m_db.getDB().m_totalSystemRelationshipCbDuration;
   auto propCbDuration1 = m_db.getDB().m_totalPropertyTablesCbDuration;
@@ -80,9 +84,7 @@ template<typename ID>
 void QueryResultsHandler<ID>::onCypherQueryStarts(std::string const & cypherQuery)
 {
   m_cypherToASTDuration = std::chrono::steady_clock::now() - m_tCallRunCypher;
-  
-  m_rows.clear();
-  
+    
   if(m_printCypherQueryText)
   {
     std::cout << std::endl;
