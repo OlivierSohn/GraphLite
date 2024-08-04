@@ -102,16 +102,41 @@ struct Strings
     strings.push_back(std::move(v.string));
   }
   std::vector<std::unique_ptr<char[]>> strings;
-  std::vector<char*> stringsArray; // this is used for binding via carray sqlite extention.
+  std::vector<char*> stringsArray; // this is used for binding via the carray sqlite extention.
 };
 
 using HomogeneousNonNullableValues = std::variant<
 std::monostate, // empty list
 std::shared_ptr<std::vector<double>>,
 std::shared_ptr<std::vector<int64_t>>,
-std::shared_ptr<Strings>, // this format is OK for binding via carray sqlite extention.
+std::shared_ptr<Strings>, // this format is OK for binding via the carray sqlite extention.
 std::shared_ptr<ByteArrays>
 >;
 
 // Will throw if v has a value and val is incompatible with this value.
 void append(Value && val, HomogeneousNonNullableValues & v);
+
+
+template<typename T>
+struct Traits;
+
+template<>
+struct Traits<int64_t>
+{
+  static constexpr auto correspondingValueType = ValueType::Integer;
+};
+template<>
+struct Traits<double>
+{
+  static constexpr auto correspondingValueType = ValueType::Float;
+};
+template<>
+struct Traits<StringPtr>
+{
+  static constexpr auto correspondingValueType = ValueType::String;
+};
+template<>
+struct Traits<ByteArrayPtr>
+{
+  static constexpr auto correspondingValueType = ValueType::ByteArray;
+};

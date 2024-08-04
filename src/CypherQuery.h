@@ -14,21 +14,25 @@ SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
                              const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
                              bool printCypherAST);
 
-using FOnOrderAndColumnNames = std::function<void(const GraphDB::ResultOrder&,
+using FOnOrderAndColumnNames = std::function<void(const ResultOrder&,
                                                   const std::vector<Variable>&,
-                                                  const GraphDB::VecColumnNames&)>;
+                                                  const VecColumnNames&)>;
 
-using FOnRow = std::function<void(const GraphDB::VecValues&)>;
+using FOnRow = std::function<void(const VecValues&)>;
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
-void runSingleQuery(const SingleQuery& q, GraphDB& db, const FOnOrderAndColumnNames& fOnOrderAndColumnNames, const FOnRow& fOnRow);
+template<typename ID>
+void runSingleQuery(const SingleQuery& q,
+                    GraphDB<ID>& db,
+                    const FOnOrderAndColumnNames& fOnOrderAndColumnNames,
+                    const FOnRow& fOnRow);
 }
 
 
-template<typename ResultsHander>
+template<typename ID, typename ResultsHander>
 void runCypher(const std::string& cypherQuery,
                const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
-               GraphDB&db,
+               GraphDB<ID>&db,
                ResultsHander& resultsHandler)
 {
   using detail::cypherQueryToAST;
@@ -46,9 +50,11 @@ void runCypher(const std::string& cypherQuery,
   } scope{resultsHandler};
 
   runSingleQuery(ast, db,
-                 [&](const GraphDB::ResultOrder& ro, const std::vector<Variable>& varNames, const GraphDB::VecColumnNames& colNames)
+                 [&](const ResultOrder& ro, const std::vector<Variable>& varNames, const VecColumnNames& colNames)
                  { resultsHandler.onOrderAndColumnNames(ro, varNames, colNames); },
-                 [&](const GraphDB::VecValues& values)
+                 [&](const VecValues& values)
                  { resultsHandler.onRow(values); });
 }
 } // NS
+
+#include "CypherQuery.inl"

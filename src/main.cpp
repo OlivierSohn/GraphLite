@@ -17,13 +17,13 @@ int main()
       std::cout << "[openCypher] " << cypherQuery << std::endl;
       m_logIndentScope = std::make_unique<LogIndentScope>();
     }
-    void onOrderAndColumnNames(const GraphDB::ResultOrder& ro, const std::vector<openCypher::Variable>& vars, const GraphDB::VecColumnNames& colNames) {
+    void onOrderAndColumnNames(const ResultOrder& ro, const std::vector<openCypher::Variable>& vars, const VecColumnNames& colNames) {
       m_resultOrder = ro;
       m_variables = vars;
       m_columnNames = colNames;
     }
     
-    void onRow(const GraphDB::VecValues& values)
+    void onRow(const VecValues& values)
     {
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
@@ -38,9 +38,9 @@ int main()
 
   private:
     std::unique_ptr<LogIndentScope> m_logIndentScope;
-    GraphDB::ResultOrder m_resultOrder;
+    ResultOrder m_resultOrder;
     std::vector<openCypher::Variable> m_variables;
-    GraphDB::VecColumnNames m_columnNames;
+    VecColumnNames m_columnNames;
   };
   
   const bool printSQLRequests{true};
@@ -161,6 +161,11 @@ int main()
     runCypher("MATCH ()-[`r`]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 0;");
+
+    // todo support string ids. (via template type on DB ?)
+    // when opening a DB, verify it has the right type of IDs.
+    
+    // todo suport creating an index on a property type.
 
     // todo optimize LIMIT implementation to reduce the numbers of SQL rows fetched:
     // when we know we will not post filter we can have the limit clause in the system relationship table.

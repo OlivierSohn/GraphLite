@@ -484,7 +484,9 @@ TEST(Test, Perfs2)
 
   const size_t countNodes {64000};
 
-  auto dbWrapper = std::make_unique<GraphWithStats>("test.Perf2." + std::to_string(countNodes) + ".sqlite3db");
+  using ID = int64_t;
+  
+  auto dbWrapper = std::make_unique<GraphWithStats<ID>>("test.Perf2." + std::to_string(countNodes) + ".sqlite3db");
   //dbWrapper->m_printSQLRequests = true;
 
   std::mt19937 gen;
@@ -494,6 +496,8 @@ TEST(Test, Perfs2)
 
   // Here we assume that the id is 1 for the first node, 2 for the second, etc...
   // This is how sqlite auto increment "integer primary key" column works.
+  // Note that if we use a different kind of id than integer, we could pick the first created node
+  // as root, and we would be able to find it later via its internal rowid which should be 1.
   const ID expectedRootNodeId{static_cast<ID>(1ull + rootNodeIdx)};
 
   auto & db = dbWrapper->getDB();

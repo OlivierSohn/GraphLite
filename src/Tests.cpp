@@ -28,7 +28,7 @@ TEST(Test, EmptyDB)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
   
   QueryResultsHandler handler(*dbWrapper);
   
@@ -53,13 +53,13 @@ TEST(Test, SingleEntity)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
 
   auto & db = dbWrapper->getDB();
 
   db.addType("Entity", true, {});
 
-  const ID entityID = db.addNode("Entity", {});
+  const auto entityID = db.addNode("Entity", {});
 
   QueryResultsHandler handler(*dbWrapper);
   
@@ -88,15 +88,15 @@ TEST(Test, SingleRecursiveRelationship)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
 
   auto & db = dbWrapper->getDB();
 
   db.addType("Entity", true, {});
   db.addType("Relationship", false, {});
   
-  const ID entityID = db.addNode("Entity", {});
-  const ID relationshipID = db.addRelationship("Relationship", entityID, entityID, {});
+  const auto entityID = db.addNode("Entity", {});
+  const auto relationshipID = db.addRelationship("Relationship", entityID, entityID, {});
   
   QueryResultsHandler handler(*dbWrapper);
   
@@ -189,15 +189,15 @@ TEST(Test, SingleNonRecursiveRelationship)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
 
   auto & db = dbWrapper->getDB();
   db.addType("Entity", true, {});
   db.addType("Relationship", false, {});
   
-  const ID entityIDSource = db.addNode("Entity", {});
-  const ID entityIDDestination = db.addNode("Entity", {});
-  const ID relationshipID = db.addRelationship("Relationship", entityIDSource, entityIDDestination, {});
+  const auto entityIDSource = db.addNode("Entity", {});
+  const auto entityIDDestination = db.addNode("Entity", {});
+  const auto relationshipID = db.addRelationship("Relationship", entityIDSource, entityIDDestination, {});
   
   QueryResultsHandler handler(*dbWrapper);
   
@@ -289,7 +289,7 @@ TEST(Test, NullProperties)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
   
   auto & db = dbWrapper->getDB();
   const auto p_age = mkProperty("age");
@@ -297,9 +297,9 @@ TEST(Test, NullProperties)
   db.addType("Person", true, {p_age});
   db.addType("Knows", false, {p_since});
 
-  const ID entityIDSource = db.addNode("Person", {});
-  const ID entityIDDestination = db.addNode("Person", {});
-  const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {});
+  const auto entityIDSource = db.addNode("Person", {});
+  const auto entityIDDestination = db.addNode("Person", {});
+  const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, {});
 
   // querying some non-existing properties does require a SQL query on the typed table
   QueryResultsHandler handler(*dbWrapper);
@@ -340,7 +340,7 @@ TEST(Test, NonNullProperties)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
   
   auto & db = dbWrapper->getDB();
   const auto p_age = mkProperty("age");
@@ -348,9 +348,9 @@ TEST(Test, NonNullProperties)
   db.addType("Person", true, {p_age});
   db.addType("Knows", false, {p_since});
   
-  const ID entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
-  const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
-  const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
+  const auto entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
+  const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
+  const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
   
   QueryResultsHandler handler(*dbWrapper);
   
@@ -453,7 +453,7 @@ TEST(Test, DefaultValues)
 
   // Here we write the DB file
   {
-    auto dbWrapper = std::make_unique<GraphWithStats>(dbFile, Overwrite::Yes);
+    auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>(dbFile, Overwrite::Yes);
     
     auto & db = dbWrapper->getDB();
     db.addType("Person", true, {ageSchema, bytesSchema, stringSchema, doubleSchema});
@@ -461,7 +461,7 @@ TEST(Test, DefaultValues)
   }
   // Here we read the DB file we have written above
   {
-    auto dbWrapper = std::make_unique<GraphWithStats>(dbFile, Overwrite::No);
+    auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>(dbFile, Overwrite::No);
     
     auto & db = dbWrapper->getDB();
     ASSERT_TRUE(db.typesAndProperties().count("Person"));
@@ -531,12 +531,12 @@ TEST(Test, DefaultValues)
     const auto bytesVal = Value(ByteArrayPtr::fromByteArray(bytes1.data(), bytes1.size()));
     const auto stringVal = Value(StringPtr::fromCStr("ABC"));
 
-    const ID entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)},
+    const auto entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)},
                                                          std::pair{p_bytes, copy(bytesVal)},
                                                          std::pair{p_string, copy(stringVal)},
                                                          std::pair{p_double, Value(-5.5)}));
-    const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
-    const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
+    const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
+    const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
 
     QueryResultsHandler handler(*dbWrapper);
 
@@ -556,7 +556,7 @@ TEST(Test, ReturnIDs)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
   
   auto & db = dbWrapper->getDB();
   const auto p_age = mkProperty("age");
@@ -564,9 +564,9 @@ TEST(Test, ReturnIDs)
   db.addType("Person", true, {p_age});
   db.addType("Knows", false, {p_since});
   
-  const ID entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
-  const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
-  const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
+  const auto entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
+  const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
+  const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
   
   QueryResultsHandler handler(*dbWrapper);
   
@@ -687,7 +687,8 @@ TEST(Test, WhereClauses)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
   
   auto & db = dbWrapper->getDB();
   const auto p_age = mkProperty("age");
@@ -699,13 +700,13 @@ TEST(Test, WhereClauses)
   ID RelID;
   {
     entityIDSource5 = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
-    const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
+    const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
     RelID = db.addRelationship("Knows", entityIDSource5, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
   }
   {
-    const ID entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(105)}));
-    const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(110)}));
-    const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(123456)}));
+    const auto entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(105)}));
+    const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(110)}));
+    const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(123456)}));
   }
 
   QueryResultsHandler handler(*dbWrapper);
@@ -779,7 +780,7 @@ TEST(Test, WhereClausesOptimized)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
   
   auto & db = dbWrapper->getDB();
   /*
@@ -798,13 +799,13 @@ TEST(Test, WhereClausesOptimized)
   db.addType("RelBA", false, {p_propB});
   
   {
-    const ID entityA1 = db.addNode("EntityA", mkVec(std::pair{p_propA, Value(1)}));
-    const ID entityA2 = db.addNode("EntityA", mkVec(std::pair{p_propA, Value(2)}));
-    const ID entityA3 = db.addNode("EntityA", mkVec(std::pair{p_propA, Value(3)}));
+    const auto entityA1 = db.addNode("EntityA", mkVec(std::pair{p_propA, Value(1)}));
+    const auto entityA2 = db.addNode("EntityA", mkVec(std::pair{p_propA, Value(2)}));
+    const auto entityA3 = db.addNode("EntityA", mkVec(std::pair{p_propA, Value(3)}));
 
-    const ID entityB1 = db.addNode("EntityB", mkVec(std::pair{p_propB, Value(1)}));
-    const ID entityB2 = db.addNode("EntityB", mkVec(std::pair{p_propB, Value(2)}));
-    const ID entityB3 = db.addNode("EntityB", mkVec(std::pair{p_propB, Value(3)}));
+    const auto entityB1 = db.addNode("EntityB", mkVec(std::pair{p_propB, Value(1)}));
+    const auto entityB2 = db.addNode("EntityB", mkVec(std::pair{p_propB, Value(2)}));
+    const auto entityB3 = db.addNode("EntityB", mkVec(std::pair{p_propB, Value(3)}));
 
     db.addRelationship("RelAB", entityA1, entityB1, mkVec(std::pair{p_propA, Value(10)}));
     db.addRelationship("RelAB", entityA2, entityB2, mkVec(std::pair{p_propA, Value(20)}));
@@ -851,7 +852,7 @@ TEST(Test, Labels)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
   
   auto & db = dbWrapper->getDB();
   const auto p_age = mkProperty("age");
@@ -861,16 +862,16 @@ TEST(Test, Labels)
   db.addType("WorksWith", false, {p_since});
   
   {
-    const ID entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
-    const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
-    const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
-    const ID relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(123444)}));
+    const auto entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(5)}));
+    const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(10)}));
+    const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(1234)}));
+    const auto relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(123444)}));
   }
   {
-    const ID entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(105)}));
-    const ID entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(110)}));
-    const ID relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(123456)}));
-    const ID relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(12345666)}));
+    const auto entityIDSource = db.addNode("Person", mkVec(std::pair{p_age, Value(105)}));
+    const auto entityIDDestination = db.addNode("Person", mkVec(std::pair{p_age, Value(110)}));
+    const auto relationshipID = db.addRelationship("Knows", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(123456)}));
+    const auto relationshipID2 = db.addRelationship("WorksWith", entityIDSource, entityIDDestination, mkVec(std::pair{p_since, Value(12345666)}));
   }
   
   QueryResultsHandler handler(*dbWrapper);
@@ -955,8 +956,9 @@ TEST(Test, PathForbidsRelationshipsRepetition)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
-  
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
+
   auto & db = dbWrapper->getDB();
   /*
    
@@ -985,8 +987,9 @@ TEST(Test, PathAllowsNodesRepetition)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
-  
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
+
   auto & db = dbWrapper->getDB();
   /*
    
@@ -1016,8 +1019,9 @@ TEST(Test, LongerPathPattern)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
-  
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
+
   auto & db = dbWrapper->getDB();
   /*
           -----
@@ -1170,8 +1174,9 @@ TEST(Test, Limit)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
-  
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
+
   auto & db = dbWrapper->getDB();
   /*
    -----
@@ -1224,8 +1229,9 @@ TEST(Test, ParameterTypes)
 {
   LogIndentScope _{};
   
-  auto dbWrapper = std::make_unique<GraphWithStats>();
-  
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
+
   auto & db = dbWrapper->getDB();
   /*
    -----

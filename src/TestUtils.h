@@ -130,13 +130,6 @@ operator == (const Value& v, const char* str)
 namespace openCypher::test
 {
 
-template<typename T, typename Variant>
-struct isVariantMember;
-
-template<typename T, typename... TypesInVariant>
-struct isVariantMember<T, std::variant<TypesInVariant...>>
-: public std::disjunction<std::is_same<T, TypesInVariant>...> {};
-
 template<typename T, typename U = std::enable_if_t<isVariantMember<T, Value>::value>>
 std::set<std::vector<Value>> toValues(std::set<std::vector<T>> && s)
 {
@@ -170,25 +163,26 @@ struct SQLQueryStat{
   std::chrono::steady_clock::duration duration;
 };
 
+template<typename ID = int64_t>
 struct GraphWithStats
 {
   GraphWithStats(const std::optional<std::filesystem::path>& dbPath = std::nullopt, std::optional<Overwrite> overwrite = std::nullopt);
   
-  GraphDB& getDB() { return *m_graph; }
+  GraphDB<ID>& getDB() { return *m_graph; }
 
   bool m_printSQLRequests{false};
   bool m_printSQLRequestsDuration{false};
 
   std::vector<SQLQueryStat> m_queryStats;
 private:
-  std::unique_ptr<GraphDB> m_graph;
-
+  std::unique_ptr<GraphDB<ID>> m_graph;
 };
 
 
+template<typename ID = int64_t>
 struct QueryResultsHandler
 {
-  QueryResultsHandler(GraphWithStats& db)
+  QueryResultsHandler(GraphWithStats<ID>& db)
   : m_db(db)
   {}
   
@@ -200,11 +194,11 @@ struct QueryResultsHandler
     
   void onCypherQueryStarts(std::string const & cypherQuery);
 
-  void onOrderAndColumnNames(const GraphDB::ResultOrder& ro,
+  void onOrderAndColumnNames(const ResultOrder& ro,
                              const std::vector<openCypher::Variable>& vars,
-                             const GraphDB::VecColumnNames& colNames);
+                             const VecColumnNames& colNames);
   
-  void onRow(const GraphDB::VecValues& values);
+  void onRow(const VecValues& values);
   
   void onCypherQueryEnds();
   
@@ -238,12 +232,14 @@ private:
   std::chrono::steady_clock::time_point m_tCallRunCypher{};
 
   std::unique_ptr<LogIndentScope> m_logIndentScope;
-  GraphDB::ResultOrder m_resultOrder;
+  ResultOrder m_resultOrder;
   std::vector<openCypher::Variable> m_variables;
-  GraphDB::VecColumnNames m_columnNames;
+  VecColumnNames m_columnNames;
   
-  GraphWithStats& m_db;
+  GraphWithStats<ID>& m_db;
   std::vector<std::vector<Value>> m_rows;
 };
 
 }
+
+#include "TestUtils.inl"

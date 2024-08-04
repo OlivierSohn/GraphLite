@@ -20,6 +20,7 @@ SQLITE_API int sqlite3_carray_init(
 }
 #endif // GRAPHDBSQLITE_STATICALLY_LINK_CARRAY_EXTENSION
 
+template<typename ID>
 struct IDAndType
 {
   ID id{};
@@ -30,10 +31,10 @@ struct IDAndType
 
 namespace std
 {
-template<>
-struct hash<IDAndType>
+template<typename ID>
+struct hash<IDAndType<ID>>
 {
-  size_t operator()(const IDAndType& i) const
+  size_t operator()(const IDAndType<ID>& i) const
   {
     return std::hash<ID>()(i.id);
   }
@@ -201,11 +202,12 @@ void toSQLQueryStringValue(const Value & value, std::ostream& os)
 
 }  // NS
 
-GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
-                 const FuncOnSQLQueryDuration& fOnSQLQueryDuration,
-                 const FuncOnDBDiagnosticContent& fOnDiagnostic,
-                 const std::optional<std::filesystem::path>& dbPath,
-                 const std::optional<Overwrite> overwrite)
+template<typename ID>
+GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
+                     const FuncOnSQLQueryDuration& fOnSQLQueryDuration,
+                     const FuncOnDBDiagnosticContent& fOnDiagnostic,
+                     const std::optional<std::filesystem::path>& dbPath,
+                     const std::optional<Overwrite> overwrite)
 : m_fOnSQLQuery(fOnSQLQuery)
 , m_fOnSQLQueryDuration(fOnSQLQueryDuration)
 , m_fOnDiagnostic(fOnDiagnostic)
@@ -449,12 +451,14 @@ GraphDB::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
   }
 }
 
-GraphDB::~GraphDB()
+template<typename ID>
+GraphDB<ID>::~GraphDB()
 {
   sqlite3_close(m_db);
 }
 
-void GraphDB::addType(const std::string &typeName, bool isNode, const std::vector<PropertySchema> &properties)
+template<typename ID>
+void GraphDB<ID>::addType(const std::string &typeName, bool isNode, const std::vector<PropertySchema> &properties)
 {
   // We no longer delete
   /*
@@ -524,7 +528,8 @@ void GraphDB::addType(const std::string &typeName, bool isNode, const std::vecto
   // todo rollback if there is an error.
 }
 
-void GraphDB::validatePropertyValues(const std::string& typeName,
+template<typename ID>
+void GraphDB<ID>::validatePropertyValues(const std::string& typeName,
                                      const std::vector<std::pair<PropertyKeyName, Value>>& propValues) const
 {
   auto it = m_properties.find(typeName);
@@ -541,7 +546,8 @@ void GraphDB::validatePropertyValues(const std::string& typeName,
   return true;
 }
 
-bool GraphDB::findValidProperties(const std::string& typeName,
+template<typename ID>
+bool GraphDB<ID>::findValidProperties(const std::string& typeName,
                                   const std::vector<PropertyKeyName>& propNames,
                                   std::vector<bool>& valid) const
 {
@@ -556,18 +562,21 @@ bool GraphDB::findValidProperties(const std::string& typeName,
   return true;
 }
 
-void GraphDB::beginTransaction()
+template<typename ID>
+void GraphDB<ID>::beginTransaction()
 {
   if(auto res = sqlite3_exec("BEGIN TRANSACTION", 0, 0, 0))
     throw std::logic_error(sqlite3_errstr(res));
 }
-void GraphDB::endTransaction()
+template<typename ID>
+void GraphDB<ID>::endTransaction()
 {
   if(auto res = sqlite3_exec("END TRANSACTION", 0, 0, 0))
     throw std::logic_error(sqlite3_errstr(res));
 }
 
-ID GraphDB::addNode(const std::string& typeName,
+template<typename ID>
+ID GraphDB<ID>::addNode(const std::string& typeName,
                     const std::vector<std::pair<PropertyKeyName, Value>>& propValues)
 {
   const auto typeIdx = m_indexedNodeTypes.getIfExists(typeName);
@@ -600,7 +609,8 @@ ID GraphDB::addNode(const std::string& typeName,
 }
 
 // There is a system table to generate relationship ids.
-ID GraphDB::addRelationship(const std::string& typeName,
+template<typename ID>
+ID GraphDB<ID>::addRelationship(const std::string& typeName,
                             const ID& originEntity,
                             const ID& destinationEntity,
                             const std::vector<std::pair<PropertyKeyName, Value>>& propValues,
@@ -664,7 +674,8 @@ ID GraphDB::addRelationship(const std::string& typeName,
   return *relId;
 }
 
-void GraphDB::addElement(const std::string& typeName,
+template<typename ID>
+void GraphDB<ID>::addElement(const std::string& typeName,
                          const ID& id,
                          const std::vector<std::pair<PropertyKeyName, Value>>& propValues)
 {
@@ -696,7 +707,8 @@ void GraphDB::addElement(const std::string& typeName,
   });
 }
 
-void GraphDB::print()
+template<typename ID>
+void GraphDB<ID>::print()
 {
   std::vector<std::string> names;
   if(auto res = sqlite3_exec("SELECT name FROM sqlite_master WHERE type='table';",
@@ -729,7 +741,8 @@ void GraphDB::print()
   }
 }
 
-std::vector<std::string> GraphDB::computeLabels(const Element elem, const std::vector<std::string>& inputLabels) const
+template<typename ID>
+std::vector<std::string> GraphDB<ID>::computeLabels(const Element elem, const std::vector<std::string>& inputLabels) const
 {
   std::vector<std::string> labels = inputLabels;
   if(labels.empty())
@@ -749,7 +762,8 @@ std::vector<std::string> GraphDB::computeLabels(const Element elem, const std::v
   return labels;
 }
 
-std::vector<size_t> GraphDB::labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const
+template<typename ID>
+std::vector<size_t> GraphDB<ID>::labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const
 {
   std::vector<size_t> indices;
   switch(elem)
@@ -828,8 +842,9 @@ size_t countPropertiesNotEqual(const openCypher::PropertyKeyName& property,
 // An empty |labelsStr| means we want all types.
 //
 // When no value is returned it means all types are possible.
+template<typename ID>
 std::optional<std::set<size_t>>
-GraphDB::computeTypeFilter(const Element e,
+GraphDB<ID>::computeTypeFilter(const Element e,
                            const std::vector<std::string>& labelsStr)
 {
   if(labelsStr.empty())
@@ -849,7 +864,8 @@ GraphDB::computeTypeFilter(const Element e,
 }
 
 
-void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirections,
+template<typename ID>
+void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDirections,
                           const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
                           const std::vector<PathPatternElement>& pathPattern,
                           const ExpressionsByVarAndProperties& allFilters,
@@ -913,7 +929,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
     varIdxToVar[i] = var;
 
   // To minimize allocations, we use a "struct of arrays" approach here.
-  using CandidateRows = std::vector<std::vector<IDAndType>>;
+  using CandidateRows = std::vector<std::vector<IDAndType<ID>>>;
   // indexed by varToVarIdx[var]
   CandidateRows candidateRows(countDistinctVariables);
   
@@ -1154,7 +1170,7 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
         const auto & indexType = queryInfo.indexTypes[i];
         if(indexID.has_value() || indexType.has_value())
         {
-          queryInfo.candidateRows[i].push_back(IDAndType{
+          queryInfo.candidateRows[i].push_back(IDAndType<ID>{
             indexID.has_value() ? std::get<ID>(argv[*indexID]) : ID{},
             indexType.has_value() ? std::get<int64_t>(argv[*indexType]) : c_noType
           });
@@ -1287,7 +1303,8 @@ void GraphDB::forEachPath(const std::vector<TraversalDirection>& traversalDirect
 }
 
 
-void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
+template<typename ID>
+void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
                                                  const Element elem,
                                                  const std::vector<ReturnClauseTerm>& returnClauseTerms,
                                                  const std::vector<std::string>& inputLabels,
@@ -1383,7 +1400,8 @@ void GraphDB::forEachElementPropertyWithLabelsIn(const Variable & var,
   }
 }
 
-auto GraphDB::computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses) -> ResultOrder
+template<typename ID>
+auto GraphDB<ID>::computeResultOrder(const std::vector<const std::vector<ReturnClauseTerm>*>& vecReturnClauses) -> ResultOrder
 {
   const size_t resultsSize = std::accumulate(vecReturnClauses.begin(),
                                              vecReturnClauses.end(),
@@ -1411,7 +1429,8 @@ auto GraphDB::computeResultOrder(const std::vector<const std::vector<ReturnClaus
   return resultOrder;
 }
 
-void GraphDB::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
+template<typename ID>
+void GraphDB<ID>::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
                              std::vector<const Expression*>& idFilters,
                              std::map<Variable, VariablePostFilters>& postFilters) const
 {
@@ -1454,7 +1473,8 @@ void GraphDB::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
   }
 }
 
-bool GraphDB::varRequiresTypeInfo(const Variable& var,
+template<typename ID>
+bool GraphDB<ID>::varRequiresTypeInfo(const Variable& var,
                                   const std::vector<ReturnClauseTerm>& returnedProperties,
                                   const std::map<Variable, VariablePostFilters>& postFilters) const
 {
@@ -1490,7 +1510,8 @@ bool GraphDB::varRequiresTypeInfo(const Variable& var,
   return false;
 }
 
-std::string GraphDB::mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn)
+template<typename ID>
+std::string GraphDB<ID>::mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn)
 {
   std::ostringstream s;
   s << " " << typeColumn << " IN (";
@@ -1515,7 +1536,8 @@ std::string GraphDB::mkFilterTypesConstraint(const std::set<size_t>& typesFilter
 // In this query, age is either an int property or a string property:
 // MATCH (a)-[r]->(b) WHERE id(b) IN (...) RETURN a.age
 // We should probably use different queries instead of a UNION ALL approach then.
-void GraphDB::gatherPropertyValues(const Variable& var,
+template<typename ID>
+void GraphDB<ID>::gatherPropertyValues(const Variable& var,
                                    // indexed by element type
                                    const std::vector<std::unordered_set<ID>>& elemsByType,
                                    const Element elem,
@@ -1641,7 +1663,8 @@ void GraphDB::gatherPropertyValues(const Variable& var,
   }
 }
 
-size_t GraphDB::getEndElementType() const
+template<typename ID>
+size_t GraphDB<ID>::getEndElementType() const
 {
   auto max1 = m_indexedRelationshipTypes.getMaxIndex();
   auto max2 = m_indexedNodeTypes.getMaxIndex();
@@ -1653,7 +1676,8 @@ size_t GraphDB::getEndElementType() const
   return end + 1ull;
 }
 
-int GraphDB::sqlite3_exec(const std::string& queryStr,
+template<typename ID>
+int GraphDB<ID>::sqlite3_exec(const std::string& queryStr,
                           int (*callback)(void*, int, Value*, char**),
                           void * cbParam,
                           const char **errmsg,
@@ -1673,7 +1697,8 @@ int GraphDB::sqlite3_exec(const std::string& queryStr,
   return res;
 }
 
-int GraphDB::sqlite3_exec_notime(const std::string& queryStr,
+template<typename ID>
+int GraphDB<ID>::sqlite3_exec_notime(const std::string& queryStr,
                                  const sql::QueryVars& sqlVars,
                                  int (*callback)(void*, int, Value*, char**),
                                  void * cbParam,
@@ -1689,3 +1714,5 @@ int GraphDB::sqlite3_exec_notime(const std::string& queryStr,
   stmt.bindVariables(sqlVars);
   return stmt.run(callback, cbParam, errmsg);
 }
+
+template class GraphDB<int64_t>;

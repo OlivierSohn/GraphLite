@@ -1,9 +1,3 @@
-// - allow declaring hash indices, comparison indices
-// The query planner will chose the right indices.
-//
-// - use a DB with a mysql backend.
-// - one "system" table holds the relationships
-
 #pragma once
 
 #include "sqlite3.h"
@@ -19,121 +13,18 @@
 #include <set>
 #include <type_traits>
 
+#include "Metaprog.h"
+#include "GraphDBSqliteTypes.h"
 
-template <typename T, typename...U>
-using is_all_same = std::integral_constant<bool, (... && std::is_same_v<T,U>)>;
-
-// This is useful to initialize a vector with some non move-only elements.
-//
-template<typename T, std::size_t N>
-auto mkVec( std::array<T,N>&& a )
--> std::vector<T>
-{
-  return { std::make_move_iterator(std::begin(a)),
-    std::make_move_iterator(std::end(a)) };
-}
-template<typename U, typename... T>
-auto mkVec( U&&u, T&& ... t ) -> std::enable_if_t<is_all_same<U, T...>::value, std::vector<U>>
-{
-  return mkVec( std::to_array({ std::forward<U>(u), std::forward<T>(t)... }) );
-}
-
-
-
-template<typename Index>
-struct IndexedTypes
-{
-  std::optional<Index> getIfExists(std::string const & type) const
-  {
-    auto it = typeToIndex.find(type);
-    if(it == typeToIndex.end())
-      return {};
-    return it->second;
-  }
-  const std::string* getIfExists(Index const type) const
-  {
-    auto it = indexToType.find(type);
-    if(it == indexToType.end())
-      return {};
-    return &it->second;
-  }
-
-  void add(Index idx, std::string const & name)
-  {
-    auto it = typeToIndex.find(name);
-    if(it != typeToIndex.end())
-      throw std::logic_error("duplicate type");
-    typeToIndex[name] = idx;
-    indexToType[idx] = name;
-    m_maxIndex = std::max(idx, m_maxIndex.value_or(std::numeric_limits<Index>::lowest()));
-  }
-
-  const std::unordered_map<std::string, Index>& getTypeToIndex() const { return typeToIndex; }
-
-  const std::optional<Index> getMaxIndex() const { return m_maxIndex; }
-private:
-  std::unordered_map<std::string, Index> typeToIndex;
-  std::unordered_map<Index, std::string> indexToType;
-  std::optional<Index> m_maxIndex;
-};
 
 // Node and relationship IDs.
-using ID = int64_t;
-
-template<typename T>
-struct Traits;
-
-template<>
-struct Traits<int64_t>
-{
-  static constexpr auto correspondingValueType = ValueType::Integer;
-};
-template<>
-struct Traits<double>
-{
-  static constexpr auto correspondingValueType = ValueType::Float;
-};
-template<>
-struct Traits<StringPtr>
-{
-  static constexpr auto correspondingValueType = ValueType::String;
-};
-template<>
-struct Traits<ByteArrayPtr>
-{
-  static constexpr auto correspondingValueType = ValueType::ByteArray;
-};
-
-enum class Element{
-  Node,
-  Relationship
-};
-
-struct ReturnClauseTerm
-{
-  // position of the term in the return clause.
-  size_t returnClausePosition;
-
-  // TODO support more later.
-  openCypher::PropertyKeyName propertyName;
-};
-
-struct PathPatternElement
-{
-  PathPatternElement(const std::optional<openCypher::Variable>& var,
-                     const std::vector<std::string>& labels)
-  : var(var)
-  , labels(labels)
-  {}
-
-  std::optional<openCypher::Variable> var;
-  std::vector<std::string> labels;
-};
-
-enum class Overwrite{Yes, No};
-
+template<typename ID_T = int64_t>
 struct GraphDB
 {
+  static_assert(isVariantMember<ID_T, Value>::value);
+  
+  using ID = ID_T;
+
   using Limit = openCypher::Limit;
   using Variable = openCypher::Variable;
   using Expression = openCypher::Expression;
@@ -141,22 +32,6 @@ struct GraphDB
   using PropertyKeyName = openCypher::PropertyKeyName;
   using TraversalDirection = openCypher::TraversalDirection;
   using ExpressionsByVarAndProperties = openCypher::ExpressionsByVarAndProperties;
-
-  // Contains information to order results in the same order as they were specified in the return clause.
-  using ResultOrder = std::vector<std::pair<
-  unsigned /* i = index into VecValues, VecColumnNames*/,
-  unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
-  
-  using VecColumnNames = std::vector<const std::vector<PropertyKeyName>*>;
-  using VecValues = std::vector<const std::vector<Value>*>;
-  
-  using FuncResults = std::function<void(const ResultOrder&, const std::vector<Variable>&, const VecColumnNames&, const VecValues&)>;
-  
-  using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
-  using FuncOnSQLQueryDuration = std::function<void(const std::chrono::steady_clock::duration)>;
-  using FuncOnDBDiagnosticContent = std::function<void(int argc, Value *argv, char **column)>;
-  
-  static constexpr const char* c_defaultDBPath{"default.sqlite3db"};
 
   // @param dbPath : DB file path. If this parameter is std::nullopt, the DB file path is c_defaultDBPath.
   // @param overwrite :
