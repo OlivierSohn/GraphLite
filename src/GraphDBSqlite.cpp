@@ -416,9 +416,6 @@ GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
         throw std::invalid_argument("Could not find ID field '" + m_idProperty.name.symbolicName.str + "' in nodes table.");
       if(data.inferredIDPropertySchema->type != m_idProperty.type)
         throw std::invalid_argument("ID type mismatch, expected " + toStr(m_idProperty.type) + " but have " + toStr(data.inferredIDPropertySchema->type));
-
-         
-         
     }
 
     const char* msg{};
@@ -450,7 +447,6 @@ GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
         throw std::logic_error("Invalid DB, type already exists:" + typeName);
 
       std::set<PropertySchema>& set = m_properties[typeName];
-      set.insert(m_idProperty);
 
       std::ostringstream s;
       s << "PRAGMA table_info('" << typeName << "')";
@@ -530,15 +526,6 @@ GraphDB<ID>::~GraphDB()
 template<typename ID>
 void GraphDB<ID>::addType(const std::string &typeName, bool isNode, const std::vector<PropertySchema> &properties)
 {
-  // We no longer delete
-  /*
-  {
-    const std::string req = "DROP TABLE " + typeName + ";";
-    // ignore error
-    auto res = sqlite3_exec(req, 0, 0, 0);
-  }
-   */
-
   if(auto it = m_properties.find(typeName); it != m_properties.end())
     throw std::logic_error("CREATE TABLE, type already exists.");
 
@@ -595,7 +582,7 @@ void GraphDB<ID>::addType(const std::string &typeName, bool isNode, const std::v
       set.insert(propertyName);
     set.insert(m_idProperty);
   }
-  // todo rollback if there is an error.
+  // todo use a transaction, rollback if there is an error.
 }
 
 template<typename ID>
