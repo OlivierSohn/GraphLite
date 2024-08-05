@@ -1,26 +1,25 @@
 # What is it?
 
-An attempt to create a simple graph DB, in C++.
+An in-process Graph DB using SQLite.
+
+The graph DB can be constructed via a C++ API and queried via `openCypher`
+(only a subset of the `openCypher` grammar is supported at this point).
+
+For an example usage, you can look at the code in [this file](src/main.cpp)
 
 # Notes
 
-To install antlr:
+Antlr is used for parsing the openCypher requests.
+
+The `openCypher` Antlr parser code has been generated this way:
+
+```
+antlr -visitor -Dlanguage=Cpp -o ./graphdblite/src/cypherparser/ /Users/Olivier/Downloads/Cypher.g4
+```
+
+Antlr can be installed via `brew` on OSX:
 
 ```
 brew install antlr
 brew install antlr4-cpp-runtime
-```
-
-```
-(base) Olivier@Oliviers-iMac dev % brew info antlr4-cpp-runtime   
-==> antlr4-cpp-runtime: stable 4.13.1 (bottled)
-ANother Tool for Language Recognition C++ Runtime Library
-https://www.antlr.org/
-Installed
-/usr/local/Cellar/antlr4-cpp-runtime/4.13.1 (188 files, 3.2MB) *
-```
-
-To generate the cypher parser:
-```
-antlr -visitor -Dlanguage=Cpp -o ./graphdblite/src/cypherparser/ /Users/Olivier/Downloads/Cypher.g4
 ```
