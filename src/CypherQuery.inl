@@ -109,7 +109,7 @@ void runSingleQuery(const SingleQuery& q,
     if(app.firstNodePattern.mayVariable.has_value())
       variables[*app.firstNodePattern.mayVariable] = mkReturnedProperties(*app.firstNodePattern.mayVariable);
     pathPatternElements.emplace_back(app.firstNodePattern.mayVariable,
-                                     asStringVec(app.firstNodePattern.labels));
+                                     asStringSet(app.firstNodePattern.labels));
 
     std::vector<TraversalDirection> traversalDirections;
 
@@ -120,12 +120,12 @@ void runSingleQuery(const SingleQuery& q,
       if(pec.relPattern.mayVariable.has_value())
         variables[*pec.relPattern.mayVariable] = mkReturnedProperties(*pec.relPattern.mayVariable);
       pathPatternElements.emplace_back(pec.relPattern.mayVariable,
-                                       asStringVec(pec.relPattern.labels));
+                                       asStringSet(pec.relPattern.labels));
 
       if(pec.nodePattern.mayVariable.has_value())
         variables[*pec.nodePattern.mayVariable] = mkReturnedProperties(*pec.nodePattern.mayVariable);
       pathPatternElements.emplace_back(pec.nodePattern.mayVariable,
-                                       asStringVec(pec.nodePattern.labels));
+                                       asStringSet(pec.nodePattern.labels));
     }
     
     {
@@ -193,7 +193,7 @@ void runSingleQuery(const SingleQuery& q,
     filter.insert(filter.end(), exprs.begin(), exprs.end());
   }
   
-  const std::vector<std::string> labelsStr = asStringVec(labels);
+  const std::set<std::string> labelsStr = asStringSet(labels);
   
   db.forEachElementPropertyWithLabelsIn(variable,
                                         elem,

@@ -22,7 +22,11 @@ template<typename ID_T = int64_t>
 struct GraphDB
 {
   static_assert(isVariantMember<ID_T, Value>::value);
-  
+
+  // In the future we may support multiple labels per element if we store labels in a json property, in
+  // the system (nodes and relationships) tables.
+  static constexpr auto c_labelsPerElement = CountLabelsPerElement::One;
+
   using ID = ID_T;
 
   using Limit = openCypher::Limit;
@@ -72,7 +76,7 @@ struct GraphDB
   void forEachElementPropertyWithLabelsIn(const Variable& var,
                                           const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
-                                          const std::vector<std::string>& labels,
+                                          const std::set<std::string>& labels,
                                           const std::vector<const Expression*>* filter,
                                           const std::optional<Limit>& limit,
                                           FuncResults& f);
@@ -127,7 +131,7 @@ private:
   using AddElementPreparedStatementKey = std::pair<std::string /* type name */, std::vector<PropertyKeyName>>;
   std::map<AddElementPreparedStatementKey, std::unique_ptr<SQLPreparedStatement>> m_addElementPreparedStatements;
 
-  std::vector<std::string> computeLabels(const Element, const std::vector<std::string>& inputLabels) const;
+  std::set<std::string> computeLabels(const Element, const std::set<std::string>& inputLabels) const;
   std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
   
   void validatePropertyValues(const std::string& typeName,
@@ -162,7 +166,7 @@ private:
 
   std::optional<std::set<size_t>> computeTypeFilter(const Element e,
                                                     const LabelAssociation,
-                                                    std::vector<std::string> const & nodeLabelsStr);
+                                                    std::set<std::string> const & nodeLabelsStr);
   
   static std::string mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn);
 

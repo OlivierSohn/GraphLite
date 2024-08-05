@@ -872,20 +872,20 @@ void GraphDB<ID>::print()
 }
 
 template<typename ID>
-std::vector<std::string> GraphDB<ID>::computeLabels(const Element elem, const std::vector<std::string>& inputLabels) const
+std::set<std::string> GraphDB<ID>::computeLabels(const Element elem, const std::set<std::string>& inputLabels) const
 {
-  std::vector<std::string> labels = inputLabels;
+  std::set<std::string> labels = inputLabels;
   if(labels.empty())
   {
     switch(elem)
     {
       case Element::Node:
         for(const auto&[key, _] : m_indexedNodeTypes.getTypeToIndex())
-          labels.push_back(key);
+          labels.insert(key);
         break;
       case Element::Relationship:
         for(const auto&[key, _] : m_indexedRelationshipTypes.getTypeToIndex())
-          labels.push_back(key);
+          labels.insert(key);
         break;
     }
   }
@@ -921,6 +921,7 @@ std::vector<size_t> GraphDB<ID>::labelsToTypeIndices(const Element elem, const s
 bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
                            const std::set<PropertySchema>& sqlFields,
                            const std::map<openCypher::Variable, std::map<openCypher::PropertyKeyName, std::string>>& propertyMappingCypherToSQL,
+                           const CountLabelsPerElement labelsPerElement,
                            std::string& sqlFilter,
                            sql::QueryVars & vars)
 {
@@ -942,7 +943,7 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
 
   // if the expression would be evaluated as FALSE in the WHERE clause, we return false.
   // if the expression would be evaluated as TRUE in the WHERE clause, we return true and make the clause empty.
-  if(auto eval = sqlExpr->tryEvaluate(elementType))
+  if(auto eval = sqlExpr->tryEvaluate(labelsPerElement, std::nullopt /* it could be any element type */))
   {
     switch(*eval)
     {
@@ -954,7 +955,7 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
     }
   }
   std::ostringstream s;
-  sqlExpr->toString(s, vars);
+  sqlExpr->toString(s, labelsPerElement, std::nullopt /* it could be any element type */, vars);
   sqlFilter = s.str();
   return true;
 }
@@ -1325,7 +1326,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
         for(const auto & [var, idField] : variableToIDField)
           propertyMappingCypherToSQL[var][m_idProperty.name] = idField;
         std::string sqlFilter;
-        if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter, sqlVars))
+        if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, c_labelsPerElement, sqlFilter, sqlVars))
           throw std::logic_error("[Unexpected] Expressions in idFilters are all equi-property with property m_idProperty");
         if(!sqlFilter.empty())
           constraints.push_back("( " + sqlFilter + " )");
@@ -1535,7 +1536,7 @@ template<typename ID>
 void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
                                                  const Element elem,
                                                  const std::vector<ReturnClauseTerm>& returnClauseTerms,
-                                                 const std::vector<std::string>& inputLabels,
+                                                 const std::set<std::string>& inputLabels,
                                                  const std::vector<const Expression*>* filter,
                                                  const std::optional<Limit>& limit,
                                                  FuncResults& f)

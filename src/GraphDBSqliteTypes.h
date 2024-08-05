@@ -59,7 +59,7 @@ struct ReturnClauseTerm
 struct PathPatternElement
 {
   PathPatternElement(const std::optional<openCypher::Variable>& var,
-                     const std::vector<std::string>& labels)
+                     const std::set<std::string>& labels)
   : var(var)
   , labels(labels)
   {}
@@ -67,7 +67,7 @@ struct PathPatternElement
   std::optional<openCypher::Variable> var;
 
   // label constraints are AND-ed
-  std::vector<std::string> labels;
+  std::set<std::string> labels;
 };
 
 enum class Overwrite{Yes, No};

@@ -78,12 +78,11 @@ struct Labels
 namespace detail
 {
 
-inline std::vector<std::string> asStringVec(Labels const & labels)
+inline std::set<std::string> asStringSet(Labels const & labels)
 {
-  std::vector<std::string> labelsStr;
-  labelsStr.reserve(labels.labels.size());
+  std::set<std::string> labelsStr;
   for(const auto & label : labels.labels)
-    labelsStr.push_back(label.symbolicName.str);
+    labelsStr.insert(label.symbolicName.str);
   return labelsStr;
 }
 
@@ -502,6 +501,7 @@ struct NonArithmeticOperatorExpression : public Expression
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
   {
+    using detail::asStringSet;
     return std::visit([&](auto && arg) -> std::unique_ptr<sql::Expression> {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, Variable>)
@@ -511,7 +511,7 @@ struct NonArithmeticOperatorExpression : public Expression
           if(labels.empty())
             throw std::logic_error("cannot use a raw variable in SQL, need to have a property");
           else
-            return std::make_unique<sql::AllowedTypes>(asStringVec(labels));
+            return std::make_unique<sql::AllowedTypes>(asStringSet(labels));
         }
         // The ValueType is ignored when comparing keys.
         if(0 == sqlFields.count(PropertySchema{*mayPropertyName, ValueType::String}))
