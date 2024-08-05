@@ -68,8 +68,29 @@ struct Label
 };
 struct Labels
 {
+  // The labels constraints are AND-ed.
   std::vector<Label> labels;
+  
+  bool empty() const { return labels.empty(); }
 };
+
+
+namespace detail
+{
+
+inline std::vector<std::string> asStringVec(Labels const & labels)
+{
+  std::vector<std::string> labelsStr;
+  labelsStr.reserve(labels.labels.size());
+  for(const auto & label : labels.labels)
+    labelsStr.push_back(label.symbolicName.str);
+  return labelsStr;
+}
+
+}  // NS
+
+
+
 struct NodePattern
 {
   bool isTrivial() const { return !mayVariable.has_value() && labels.labels.empty(); }
@@ -241,7 +262,7 @@ struct Expression
   // consecutive AND-aggregations from the top of the tree
   // to return the expressions of the deepest possible AND-aggregation.
   //
-  // For example, in the expression
+  // Example: in the expression
   //
   // ((1 OR 2 OR 3)  AND  (7 AND 8))  AND  (11 OR 12)
   //
@@ -257,15 +278,17 @@ struct Expression
   //
   // we will return expressions 4, 7, 8, 10
   //
-  // And if the exact expression is:
+  // If the detailed expression is:
   //
   // ((a.style=3 OR a.style=5 OR a.type=50)  AND  (r.length<10 AND b.weight > 30))  AND  (a.type=100 OR b.type=100)
   //
-  // 4, 7, 8 are equi-var expressions, 10 is not an equi-var expression:
-  // - 10 uses variables 'a' (with property 'type'), and variable 'b' (with property 'type')
+  // 4, 7, 8 are equi-var expressions:
   // - 4 uses variable 'a' (with properties 'style' and 'type')
   // - 7 uses variable 'r' (with property 'length')
   // - 8 uses variable 'b' (with property 'weight')
+  //
+  // 10 is not an equi-var expression:
+  // - 10 uses variables 'a' (with property 'type'), and variable 'b' (with property 'type')
   virtual void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const = 0;
 
   virtual VarsAndProperties varsAndProperties() const = 0;
@@ -419,7 +442,8 @@ struct NonArithmeticOperatorExpression : public Expression
   
   Atom atom;
   std::optional<PropertyKeyName> mayPropertyName;
-  
+  Labels labels;
+
   std::unique_ptr<Expression> StealAsPtr() override
   {
     auto ptr = std::make_unique<NonArithmeticOperatorExpression>();
@@ -431,7 +455,22 @@ struct NonArithmeticOperatorExpression : public Expression
   {
     if(mayPropertyName.has_value())
       throw std::logic_error("asMaximalANDAggregation not implemented for NonArithmeticOperatorExpression that has a property name");
-    std::get<AggregateExpression>(atom.var).asMaximalANDAggregation(exprs);
+
+    std::visit([&](auto && arg) {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, Variable>)
+      {
+        if(labels.empty())
+          throw std::logic_error("asMaximalANDAggregation expects a label for a variable.");
+        exprs[varsAndProperties()].push_back(this);
+      }
+      else if constexpr (std::is_same_v<T, Literal>)
+        throw std::logic_error("asMaximalANDAggregation didn't expect a literal.");
+      else if constexpr (std::is_same_v<T, AggregateExpression>)
+        arg.asMaximalANDAggregation(exprs);
+      else
+        static_assert(c_false<T>, "non-exhaustive visitor!");
+    }, atom.var);
   }
 
   VarsAndProperties varsAndProperties() const override
@@ -468,7 +507,12 @@ struct NonArithmeticOperatorExpression : public Expression
       if constexpr (std::is_same_v<T, Variable>)
       {
         if(!mayPropertyName.has_value())
-          throw std::logic_error("cannot use a raw variable in SQL, need to have a property");
+        {
+          if(labels.empty())
+            throw std::logic_error("cannot use a raw variable in SQL, need to have a property");
+          else
+            return std::make_unique<sql::AllowedTypes>(asStringVec(labels));
+        }
         // The ValueType is ignored when comparing keys.
         if(0 == sqlFields.count(PropertySchema{*mayPropertyName, ValueType::String}))
           // The property is not a SQL field so we return a null node.

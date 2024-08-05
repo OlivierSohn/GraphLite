@@ -942,7 +942,7 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
 
   // if the expression would be evaluated as FALSE in the WHERE clause, we return false.
   // if the expression would be evaluated as TRUE in the WHERE clause, we return true and make the clause empty.
-  if(auto eval = sqlExpr->tryEvaluate())
+  if(auto eval = sqlExpr->tryEvaluate(elementType))
   {
     switch(*eval)
     {
@@ -972,13 +972,18 @@ size_t countPropertiesNotEqual(const openCypher::PropertyKeyName& property,
 // An empty |labelsStr| means we want all types.
 //
 // When no value is returned it means all types are possible.
+// When an empty set is returned it means no type is possible
 template<typename ID>
 std::optional<std::set<size_t>>
 GraphDB<ID>::computeTypeFilter(const Element e,
-                           const std::vector<std::string>& labelsStr)
+                               const LabelAssociation a,
+                               const std::set<std::string>& labelsStr)
 {
   if(labelsStr.empty())
     return std::nullopt;
+  if(a == LabelAssociation::AND && labelsStr.size() >= 2)
+    // no label is possible because in our case a node or relationship has a single label.
+    return std::set<size_t>{};
   const auto & allTypes = (e == Element::Node) ? m_indexedNodeTypes : m_indexedRelationshipTypes;
   const auto countPossibleTypes = allTypes.getTypeToIndex().size();
   std::set<size_t> types;
@@ -996,7 +1001,7 @@ GraphDB<ID>::computeTypeFilter(const Element e,
 
 template<typename ID>
 void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDirections,
-                          const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
+                          const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
                           const std::vector<PathPatternElement>& pathPattern,
                           const ExpressionsByVarAndProperties& allFilters,
                           const std::optional<Limit>& limit,
@@ -1014,12 +1019,27 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   
   // These constraints contain non-id properties so we apply them while querying the non-system relationship/entity tables.
   std::map<Variable, VariablePostFilters> postFilters;
-  
-  analyzeFilters(allFilters, idFilters, postFilters);
+
+  std::map<Variable, std::vector<std::string>> additionalORedVarLabelConstraints;
+
+  Note we can apply complex constraints on multiple variables when querying the relationships table:
+  (a:Label1 AND b:Label2) OR (c:Label1 AND b:Label1)
+  So analyzeFilters should return:
+  - single- variable type constraints in a MAP<Variable, LabelAssociation::OR + std::vector<label>>: they will be used to build the system relationships query.
+  - multi-variables type constraints as special sql::Expressions: they will be used to build the system relationships query.
+  - (single- and multi-)variable type constraints that are mixed with single-variable property constraints: they will be used to build the typed property tables queries
+  - (single- and multi-)variable type constraints that are mixed with multi-variable property constraints: they cannot be handled currently.
+
+
+  analyzeFilters(allFilters, idFilters, additionalORedVarLabelConstraints, postFilters);
+
+  // We apply the LIMIT clause in the system relationships table query when
+  // we know that all candidate rows found in this query will be returned.
+  const bool applyHardLimitInSystemRelationshipsQuery = postFilters.empty();
   
   std::map<Variable, VariableInfo> varInfo;
 
-  for(const auto & [var, returnedProperties] : variablesI)
+  for(const auto & [var, returnedProperties] : variablesInfo)
   {
     VariableInfo& info = varInfo[var];
     info.needsTypeInfo = varRequiresTypeInfo(var, returnedProperties, postFilters);
@@ -1040,19 +1060,78 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
     size_t i{};
     for(const auto & pattern : pathPattern)
     {
+      std::vector<std::string> * additionalORedLabelConstraints{};
       const Element element = pathPatternIndexToElement(i);
-      nodesRelsTypesFilters.push_back(computeTypeFilter(element, pattern.labels));
       if(pattern.var.has_value())
+      {
         varToElement[*pattern.var] = element;
+        if(auto it = additionalVarLabelConstraints.find(*pattern.var); it != additionalVarLabelConstraints.end())
+          additionalORedLabelConstraints = &it->second;
+      }
+      // TODO: simplify this code using a separate class to aggregate the label constraints per variable:
+      // struct VariableLabelConstraits {
+      //   // Upon creation of this object, all labels are allowed.
+      //   // Each time this method is called, the set of allowed objects is intersected with the new allowed labels.
+      //   // When the intersection becomes empty, the function returns false, and we know the query will
+      //   // return no result.
+      //   // For this example:
+      //   //   MATCH (a)-[]->(a) WHERE a:Label1 OR a:Label2 Return id(a)
+      //   // This function will be called a single time with inputs:
+      //   // - Label1, Label2
+      //   // as a result the allowed types will be Label1 and Label2.
+      //   // For this example:
+      //   //   MATCH (a:Label1)-[]->(a:Label1) WHERE a:Label1 Return id(a)
+      //   // This function will be called 3 times with inputs:
+      //   // - Label1
+      //   // - Label1
+      //   // - Label1
+      //   // as a result the allowed type will be Label1.
+      //   // For this example:
+      //   //   MATCH (a:Label1)-[]->(a:Label1:Label2) WHERE a:Label1 Return id(a)
+      //   // a:Label1:Label2 means 'a' must have both labels, which is not possible
+      //   // in our case because by design each node and relationship have a single label.
+      //   bool intersectLabels(std::vector<std::string>& allowedLabels);
+      // };
+      // std::map<Variable, VariableLabelConstraits>
+      const auto filterA = computeTypeFilter(element, LabelAssociation::AND, pattern.labels);
+      if(filterA.has_value() && filterA->empty())
+        return;
+      if(additionalORedLabelConstraints)
+      {
+        if(const auto filterB = computeTypeFilter(element, LabelAssociation::OR, *additionalORedLabelConstraints))
+        {
+          if(filterB->empty())
+            return;
+          if(filterA.has_value())
+          {
+            // Each node an relationship have a single label in our model,
+            // so we compute the intersection of sets to know the allowed types.
+            std::set<size_t> intersection;
+            for(const auto valueA : *filterA)
+              if(filterB->count(valueA))
+                intersection.insert(valueA);
+            if(intersection.empty())
+              // no type is allowed.
+              return;
+            nodesRelsTypesFilters.push_back(intersection);
+          }
+          else
+            nodesRelsTypesFilters.push_back(filterB);
+        }
+        else
+          nodesRelsTypesFilters.push_back(filterA);
+      }
+      else
+        nodesRelsTypesFilters.push_back(filterA);
       ++i;
     }
   }
 
   std::map<Variable, size_t> varToVarIdx;
-  for(const auto & [var, _] : variablesI)
+  for(const auto & [var, _] : variablesInfo)
     varToVarIdx[var] = varToVarIdx.size();
 
-  const size_t countDistinctVariables{variablesI.size()};
+  const size_t countDistinctVariables{variablesInfo.size()};
 
   std::vector<Variable> varIdxToVar(countDistinctVariables);
   for(const auto & [var, i] : varToVarIdx)
@@ -1232,7 +1311,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
           if(!columnNameForType.has_value())
             throw std::logic_error("[Unexpected]");
           // Note: for MATCH (a:Type1)-[]->(a:Type2) since 'a' is used in both node patterns,
-          //   it means a must be Type1 AND Type2.
+          //   it means 'a' must be Type1 AND Type2.
           // In our case (single label per entity) no row will be ever returned.
           constraints.push_back(mkFilterTypesConstraint(*typeFilter, *columnNameForType));
         }
@@ -1286,6 +1365,9 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
         addWhereTerm();
         s << constraint;
       }
+      
+      if(applyHardLimitInSystemRelationshipsQuery && limit.has_value())
+        s << " LIMIT " << limit->maxCountRows;
     }
 
     const char*msg{};
@@ -1326,7 +1408,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
     const auto endElementType = getEndElementType();
     // indexed by element type
     std::vector<std::unordered_set<ID> /* element ids*/> elementsByType;
-    for(const auto & [var, returnedProperties] : variablesI)
+    for(const auto & [var, returnedProperties] : variablesInfo)
     {
       const size_t i = varToVarIdx[var];
       auto & props = strPropertiesByVar[i];
@@ -1369,7 +1451,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   std::vector<bool> varOnlyReturnsId(countDistinctVariables);
   std::vector<bool> lookupProperties(countDistinctVariables);
 
-  for(const auto & [var, returnedProperties] : variablesI)
+  for(const auto & [var, returnedProperties] : variablesInfo)
   {
     const size_t i = varToVarIdx[var];
     vecReturnClauses[i] = &returnedProperties;

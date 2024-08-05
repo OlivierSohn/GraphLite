@@ -79,9 +79,9 @@ struct Expression
 {
   virtual ~Expression() = default;
 
-  virtual std::optional<Evaluation> tryEvaluate() = 0;
+  virtual std::optional<Evaluation> tryEvaluate(std::string const& elementType) = 0;
   
-  virtual void toString(std::ostream& os, QueryVars& vars) const = 0;
+  virtual void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const = 0;
 };
 
 struct Literal : public Expression
@@ -90,9 +90,9 @@ struct Literal : public Expression
   : m_variant(variant)
   {}
 
-  std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override { return std::nullopt; }
 
-  void toString(std::ostream& os, QueryVars& vars) const override {
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override {
     std::visit([&](auto && arg) {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, std::shared_ptr<Value>>)
@@ -120,8 +120,8 @@ struct Field : public Expression
   Field(std::string const& str)
   : str(str)
   {}
-  std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
-  void toString(std::ostream& os, QueryVars& vars) const override
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override { return std::nullopt; }
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override
   {
     os << str;
   }
@@ -132,8 +132,27 @@ struct Field : public Expression
 // Represents a null value.
 struct Null : public Expression
 {
-  std::optional<Evaluation> tryEvaluate() override { return Evaluation::Unknown; }
-  void toString(std::ostream& os, QueryVars& vars) const override { os << "NULL"; }
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override { return Evaluation::Unknown; }
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override { os << "NULL"; }
+};
+
+// Represents a null value.
+struct AllowedTypes : public Expression
+{
+  std::set<std::string> allowedTypes;
+
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override {
+    if(allowedTypes.count(elementType))
+      return Evaluation::True;
+    return Evaluation::False;
+  }
+  
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override {
+    if(allowedTypes.count(elementType))
+      os << " TRUE ";
+    else
+      os << " FALSE ";
+  }
 };
 
 struct ComparisonExpression : public Expression {
@@ -143,10 +162,10 @@ struct ComparisonExpression : public Expression {
   , m_right(std::move(right))
   {}
 
-  std::optional<Evaluation> tryEvaluate() override
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override
   {
-    auto leftEval = m_left->tryEvaluate();
-    auto rightEval = m_right->tryEvaluate();
+    auto leftEval = m_left->tryEvaluate(elementType);
+    auto rightEval = m_right->tryEvaluate(elementType);
     if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
       return Evaluation::Unknown;
     if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
@@ -170,13 +189,13 @@ struct ComparisonExpression : public Expression {
     return std::nullopt;
   }
 
-  void toString(std::ostream& os, QueryVars& vars) const override
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override
   {
-    m_left->toString(os, vars);
+    m_left->toString(os, elementType, vars);
     os << " ";
     os << toStr(m_comp);
     os << " ";
-    m_right->toString(os, vars);
+    m_right->toString(os, elementType, vars);
   }
 
 private:
@@ -202,12 +221,12 @@ struct StringListNullPredicateExpression : public Expression {
     m_type = *type;
   }
   
-  std::optional<Evaluation> tryEvaluate() override
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override
   {
     // This works for the List case i.e "a.prop IN [1, 2]",
     // but might need to be revisited for otehr cases when we support them.
-    auto leftEval = m_left->tryEvaluate();
-    auto rightEval = m_right->tryEvaluate();
+    auto leftEval = m_left->tryEvaluate(elementType);
+    auto rightEval = m_right->tryEvaluate(elementType);
     if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
       return Evaluation::Unknown;
     if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
@@ -215,11 +234,11 @@ struct StringListNullPredicateExpression : public Expression {
     return std::nullopt;
   }
   
-  void toString(std::ostream& os, QueryVars& vars) const override
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override
   {
-    m_left->toString(os, vars);
+    m_left->toString(os, elementType, vars);
     os << " IN ";
-    m_right->toString(os, vars);
+    m_right->toString(os, elementType, vars);
   }
   
 private:
@@ -256,7 +275,7 @@ struct AggregateExpression : public Expression
   , m_subExprs(std::move(sub))
   {}
 
-  std::optional<Evaluation> tryEvaluate() override
+  std::optional<Evaluation> tryEvaluate(std::string const& elementType) override
   {
     switch(m_aggregator)
     {
@@ -266,7 +285,7 @@ struct AggregateExpression : public Expression
         bool hasNonEvaluated{};
         for(const auto & subExpr : m_subExprs)
         {
-          if(auto subEval = subExpr->tryEvaluate())
+          if(auto subEval = subExpr->tryEvaluate(elementType))
           {
             switch(*subEval)
             {
@@ -296,7 +315,7 @@ struct AggregateExpression : public Expression
         bool hasNonEvaluated{};
         for(const auto & subExpr : m_subExprs)
         {
-          if(auto subEval = subExpr->tryEvaluate())
+          if(auto subEval = subExpr->tryEvaluate(elementType))
           {
             switch(*subEval)
             {
@@ -323,7 +342,7 @@ struct AggregateExpression : public Expression
     throw std::logic_error("invalid enum value");
   }
 
-  void toString(std::ostream& os, QueryVars& vars) const override {
+  void toString(std::ostream& os, std::string const& elementType, QueryVars& vars) const override {
     bool first = true;
     for(const auto & subExpr : m_subExprs)
     {
@@ -332,7 +351,7 @@ struct AggregateExpression : public Expression
       else
         os << toStr(m_aggregator);
       os << " (";
-      subExpr->toString(os, vars);
+      subExpr->toString(os, elementType, vars);
       os << ") ";
     }
   }

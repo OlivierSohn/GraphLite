@@ -319,7 +319,9 @@ std::any MyCypherVisitor::visitOC_Limit(CypherParser::OC_LimitContext *context) 
     {
       const auto & nao = std::any_cast<NonArithmeticOperatorExpression>(res);
       if(nao.mayPropertyName.has_value())
-        m_errors.push_back("OC_Limit expects a no property");
+        m_errors.push_back("OC_Limit expects no property");
+      if(!nao.labels.empty())
+        m_errors.push_back("OC_Limit expects no label");
       const auto count = std::get<int64_t>(*std::get<std::shared_ptr<Value>>(std::get<Literal>(nao.atom.var).variant));
       if(count < 0)
         m_errors.push_back("OC_Limit expects a positive value");
@@ -725,6 +727,11 @@ std::any MyCypherVisitor::visitOC_ListPredicateExpression(CypherParser::OC_ListP
       m_errors.push_back("OC_ListPredicateExpression NonArithmeticOperatorExpression cannot have a property.");
       return {};
     }
+    if(!naoExp.labels.empty())
+    {
+      m_errors.push_back("OC_ListPredicateExpression NonArithmeticOperatorExpression cannot have a label.");
+      return {};
+    }
     return std::get<Literal>(std::move(naoExp.atom.var));
   }
   m_errors.push_back("OC_ListPredicateExpression expects a oC_AddOrSubtractExpression");
@@ -810,7 +817,11 @@ std::any MyCypherVisitor::visitOC_NonArithmeticOperatorExpression(CypherParser::
   }
 
   if(auto * labels = context->oC_NodeLabels())
-    m_errors.push_back("OC_NonArithmeticOperatorExpression does not support Labels.");
+  {
+    auto res = labels->accept(this);
+    if(res.type() == typeid(Labels))
+      r.labels = std::move(std::any_cast<Labels>(res));
+  }
 
   return r;
 }
@@ -923,7 +934,12 @@ std::any MyCypherVisitor::visitOC_FunctionInvocation(CypherParser::OC_FunctionIn
     m_errors.push_back("OC_FunctionInvocation expression must not have a property for now.");
     return {};
   }
-  
+  if(!naoExp.labels.empty())
+  {
+    m_errors.push_back("OC_FunctionInvocation expression must not have labels.");
+    return {};
+  }
+
   auto func = context->oC_FunctionName()->accept(this);
   if(func.type() != typeid(IdentityFunction))
   {
@@ -1064,6 +1080,11 @@ std::any MyCypherVisitor::visitOC_ListLiteral(CypherParser::OC_ListLiteralContex
       if(nao.mayPropertyName.has_value())
       {
         m_errors.push_back("OC_ListLiteral : mayPropertyName in NonArithmeticOperatorExpression is not supported");
+        return {};
+      }
+      if(!nao.labels.empty())
+      {
+        m_errors.push_back("OC_ListLiteral : labels in NonArithmeticOperatorExpression is not supported");
         return {};
       }
       append(std::move(*std::get<std::shared_ptr<Value>>(std::get<Literal>(std::move(nao.atom.var)).variant)), v);

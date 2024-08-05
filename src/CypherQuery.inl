@@ -13,6 +13,8 @@ extractProperties(const std::vector<NonArithmeticOperatorExpression>& naoExps)
     const auto& mayPropertyName = nao.mayPropertyName;
     if(!mayPropertyName.has_value())
       throw std::logic_error("Not Implemented (todo return 'entire node'?)");
+    if(!nao.labels.empty())
+      throw std::logic_error("Cannot have labels in a return clause (?)");
     // TODO support Literal in return clauses.
     const auto & var = std::get<Variable>(nao.atom.var);
     auto & elem = props[var].emplace_back();
@@ -23,14 +25,6 @@ extractProperties(const std::vector<NonArithmeticOperatorExpression>& naoExps)
   return props;
 }
 
-inline std::vector<std::string> asStringVec(Labels const & labels)
-{
-  std::vector<std::string> labelsStr;
-  labelsStr.reserve(labels.labels.size());
-  for(const auto & label : labels.labels)
-    labelsStr.push_back(label.symbolicName.str);
-  return labelsStr;
-}
 
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;

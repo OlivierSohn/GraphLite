@@ -158,7 +158,11 @@ private:
                            const std::vector<ReturnClauseTerm>& returnedProperties,
                            const std::map<Variable, VariablePostFilters>& postFilters) const;
   
-  std::optional<std::set<size_t>> computeTypeFilter(const Element e, std::vector<std::string> const & nodeLabelsStr);
+  enum class LabelAssociation{AND, OR};
+
+  std::optional<std::set<size_t>> computeTypeFilter(const Element e,
+                                                    const LabelAssociation,
+                                                    std::vector<std::string> const & nodeLabelsStr);
   
   static std::string mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn);
 

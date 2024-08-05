@@ -65,6 +65,8 @@ struct PathPatternElement
   {}
 
   std::optional<openCypher::Variable> var;
+
+  // label constraints are AND-ed
   std::vector<std::string> labels;
 };
 
