@@ -2,8 +2,8 @@
 
 An in-process Graph DB using SQLite.
 
-The Graph DB can be constructed via a [C++ API](src/GraphDBSqlite.h) and queried via `openCypher`
-(only a subset of the `openCypher` grammar is supported at this point).
+The Graph DB can be constructed via a C++ API (see [GraphDBSqlite.h](src/GraphDBSqlite.h)) and queried via `openCypher`
+(see [CypherQuery.h](src/CypherQuery.h). Only a subset of the `openCypher` grammar is supported at this point).
 
 For an example usage, you can look at the code in [main.cpp](src/main.cpp)
 
@@ -28,6 +28,8 @@ Each node or edge type has a given set of strongly typed properties. Supported p
 
 # Notes
 
+## Antlr
+
 Antlr is used for parsing the openCypher requests.
 
 The `openCypher` Antlr parser code has been generated this way:
@@ -42,3 +44,8 @@ Antlr can be installed via `brew` on OSX:
 brew install antlr
 brew install antlr4-cpp-runtime
 ```
+
+## Source code
+
+I was initially planning to use Apache Parquet to persist the graph and Apache Arrow to load it into memory:
+[GraphDB.cpp](src/GraphDB.cpp) and [GraphDB.h](src/GraphDB.h) are leftovers from this initial direction, but are not used to compile the project anymore.
