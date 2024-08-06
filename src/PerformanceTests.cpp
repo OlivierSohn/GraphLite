@@ -646,14 +646,14 @@ TEST(Test, Perfs2)
 
     // Performances related to these queries are documented in the comment above this test function.
 
-    handler.run("MATCH (a)-[r]->(b)-[r2]->(c)-[r3]->(d) WHERE id(a) IN $list AND b.age < 6000 AND c.age > 2000 return id(b), d.age", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b)-[r2]->(c)-[r3]->(d) WHERE id(a) IN $list return id(b), d.age", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b)-[r2]->(c) WHERE id(a) IN $list return id(b), c.age", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), a.age", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), a.age, b.age", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), b.age", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), r.since", {{SymbolicName{"list"}, expandFronteer}});
-    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b)", {{SymbolicName{"list"}, expandFronteer}});
+    handler.run("MATCH (a)-[r]->(b)-[r2]->(c)-[r3]->(d) WHERE id(a) IN $list AND b.age < 6000 AND c.age > 2000 return id(b), d.age", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b)-[r2]->(c)-[r3]->(d) WHERE id(a) IN $list return id(b), d.age", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b)-[r2]->(c) WHERE id(a) IN $list return id(b), c.age", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), a.age", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), a.age, b.age", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), b.age", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b), r.since", {{ParameterName{"list"}, expandFronteer}});
+    //handler.run("MATCH (a)-[r]->(b) WHERE id(a) IN $list return id(b)", {{ParameterName{"list"}, expandFronteer}});
     
     auto & st = stats.emplace_back();
     st.countRowsFetched = handler.countRows();

@@ -11,6 +11,12 @@
 namespace openCypher::test
 {
 
+Label operator ""_L(const char* name, size_t sz)
+{
+  return Label{ SymbolicName{ name } };
+}
+
+
 TEST(Test, ComparingValuesWithRefWrappedValues)
 {
   Value v1(1ll);
@@ -464,11 +470,11 @@ TEST(Test, DefaultValues)
     auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>(dbFile, Overwrite::No);
     
     auto & db = dbWrapper->getDB();
-    ASSERT_TRUE(db.typesAndProperties().count("Person"));
-    ASSERT_TRUE(db.typesAndProperties().count("Knows"));
+    ASSERT_TRUE(db.typesAndProperties().count("Person"_L));
+    ASSERT_TRUE(db.typesAndProperties().count("Knows"_L));
 
-    auto itPerson = db.typesAndProperties().find("Person");
-    auto itKnows = db.typesAndProperties().find("Knows");
+    auto itPerson = db.typesAndProperties().find("Person"_L);
+    auto itKnows = db.typesAndProperties().find("Knows"_L);
     ASSERT_TRUE(itPerson != db.typesAndProperties().end());
     ASSERT_TRUE(itKnows != db.typesAndProperties().end());
 
@@ -1359,28 +1365,28 @@ TEST(Test, Labels)
   handler.run("MATCH (a)-[r:NotHere]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(0, handler.countRows());
-  EXPECT_EQ(1, handler.countSQLQueries());
+  EXPECT_EQ(0, handler.countSQLQueries());
   
   // Non-existing label on source entity
   
   handler.run("MATCH (a:NotHere)-[r]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(0, handler.countRows());
-  EXPECT_EQ(1, handler.countSQLQueries());
+  EXPECT_EQ(0, handler.countSQLQueries());
   
   // Non-existing label on destination entity
   
   handler.run("MATCH (a)-[r]->(b:NotHere) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(0, handler.countRows());
-  EXPECT_EQ(1, handler.countSQLQueries());
+  EXPECT_EQ(0, handler.countSQLQueries());
   
   // Non-existing label on destination entity (with existing labels on others)
   
   handler.run("MATCH (a:Person)-[r:Knows]->(b:NotHere) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(0, handler.countRows());
-  EXPECT_EQ(1, handler.countSQLQueries());
+  EXPECT_EQ(0, handler.countSQLQueries());
   
   handler.run("MATCH (a)-[r:Knows]->(b) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
