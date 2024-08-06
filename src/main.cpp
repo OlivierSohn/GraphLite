@@ -117,8 +117,12 @@ int main()
   try
   {
     runCypher("MATCH (`n`) WHERE n:Node1      RETURN id(`n`), `n`.test, `n`.`what`;");
-    // verify this throws
+    runCypher("MATCH (`n`) WHERE n:Node1 AND n:Node2     RETURN id(`n`), `n`.test, `n`.`what`;");
+    // this is ok
     runCypher("MATCH (`n`) WHERE n:Node1 OR n.test = 2     RETURN id(`n`), `n`.test, `n`.`what`;");
+    
+    // but verify this throws
+    runCypher("MATCH ((n)-[r]->(m)) WHERE n:Node1 OR m.test = 2     RETURN id(`n`), `n`.test, `n`.`what`;");
 
     runCypher("MATCH (`n`)       RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node1) RETURN id(`n`), `n`.test, `n`.`what`;");

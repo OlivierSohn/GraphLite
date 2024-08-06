@@ -9,6 +9,7 @@
 #include <set>
 #include <map>
 #include <any>
+#include <functional>
 
 #include "SqlAST.h"
 #include "Value.h"
@@ -20,24 +21,113 @@ namespace openCypher
 {
 using Comparison = sql::Comparison;
 
+
 struct SymbolicName
 {
   std::string str;
   
-  friend bool operator<(const SymbolicName&a, const SymbolicName&b)
-  {
-    return a.str < b.str;
-  }
-  friend bool operator==(const SymbolicName&a, const SymbolicName&b)
-  {
-    return a.str == b.str;
-  }
+  // We intentionnaly don't have < and == operators so that this cannot be the key of a map.
 };
+
 inline std::ostream& operator<<(std::ostream& os, const SymbolicName& p)
 {
   os << p.str;
   return os;
 }
+
+struct ParameterName
+{
+  SymbolicName symbolicName;
+  
+  friend bool operator<(const ParameterName&a, const ParameterName&b)
+  {
+    return a.symbolicName.str < b.symbolicName.str;
+  }
+  friend bool operator==(const ParameterName&a, const ParameterName&b)
+  {
+    return a.symbolicName.str == b.symbolicName.str;
+  }
+};
+
+
+
+
+struct Label
+{
+  SymbolicName symbolicName;
+  
+  friend bool operator<(const Label& a, const Label& b)
+  { return a.symbolicName.str < b.symbolicName.str; }
+  
+  friend bool operator==(const Label& a, const Label& b)
+  { return a.symbolicName.str == b.symbolicName.str; }
+};
+inline std::ostream& operator<<(std::ostream& os, const Label& p)
+{
+  os << p.symbolicName;
+  return os;
+}
+
+}  // NS
+
+namespace std
+{
+template<>
+struct hash<openCypher::Label>
+{
+  size_t operator()(const openCypher::Label& l) const
+  {
+    return std::hash<std::string>()(l.symbolicName.str);
+  }
+};
+}  // NS
+
+
+namespace openCypher
+{
+
+struct IndexedLabels
+{
+  using Index = sql::ElementTypeIndex;
+  
+  std::optional<Index> getIfExists(Label const & type) const
+  {
+    auto it = typeToIndex.find(type);
+    if(it == typeToIndex.end())
+      return {};
+    return it->second;
+  }
+  const Label* getIfExists(Index const type) const
+  {
+    auto it = indexToType.find(type);
+    if(it == indexToType.end())
+      return {};
+    return &it->second;
+  }
+  
+  void add(Index idx, Label const & name)
+  {
+    auto it = typeToIndex.find(name);
+    if(it != typeToIndex.end())
+      throw std::logic_error("duplicate type");
+    typeToIndex[name] = idx;
+    indexToType[idx] = name;
+    if(m_maxIndex.has_value())
+      m_maxIndex = std::max(idx, *m_maxIndex);
+    else
+      m_maxIndex = idx;
+  }
+  
+  const std::unordered_map<Label, Index>& getTypeToIndex() const { return typeToIndex; }
+  
+  const std::optional<Index> getMaxIndex() const { return m_maxIndex; }
+private:
+  std::unordered_map<Label, Index> typeToIndex;
+  std::unordered_map<Index, Label> indexToType;
+  std::optional<Index> m_maxIndex;
+};
+
+
 
 struct Variable
 {
@@ -45,11 +135,11 @@ struct Variable
   
   friend bool operator<(const Variable&a, const Variable&b)
   {
-    return a.symbolicName < b.symbolicName;
+    return a.symbolicName.str < b.symbolicName.str;
   }
   friend bool operator==(const Variable&a, const Variable&b)
   {
-    return a.symbolicName == b.symbolicName;
+    return a.symbolicName.str == b.symbolicName.str;
   }
 };
 inline std::ostream& operator<<(std::ostream& os, const Variable& p)
@@ -58,36 +148,20 @@ inline std::ostream& operator<<(std::ostream& os, const Variable& p)
   return os;
 }
 
+
 struct SchemaName
 {
   SymbolicName symbolicName;
 };
-struct Label
-{
-  SymbolicName symbolicName;
-};
+
+
 struct Labels
 {
   // The labels constraints are AND-ed.
-  std::vector<Label> labels;
+  std::set<Label> labels;
   
   bool empty() const { return labels.empty(); }
 };
-
-
-namespace detail
-{
-
-inline std::set<std::string> asStringSet(Labels const & labels)
-{
-  std::set<std::string> labelsStr;
-  for(const auto & label : labels.labels)
-    labelsStr.insert(label.symbolicName.str);
-  return labelsStr;
-}
-
-}  // NS
-
 
 
 struct NodePattern
@@ -97,12 +171,15 @@ struct NodePattern
   Labels labels;
   // TODO properties
 };
+
+
 enum class TraversalDirection
 {
   Any,
   Forward,
   Backward
 };
+
 
 struct RelationshipPattern
 {
@@ -113,26 +190,34 @@ struct RelationshipPattern
   // TODO range
 };
 
+
 struct PatternElementChain
 {
   RelationshipPattern relPattern;
   NodePattern nodePattern;
 };
+
+
 struct PatternElement
 {
   NodePattern firstNodePattern;
   std::vector<PatternElementChain> patternElementChains;
 };
+
+
 using AnonymousPatternPart = PatternElement;
 struct PatternPart
 {
   std::optional<Variable> mayVariable;
   AnonymousPatternPart anonymousPatternPart;
 };
+
 struct Pattern
 {
   std::vector<PatternPart> patternParts;
 };
+
+
 // Should this inherit from Expression? in the sql AST, sql::Literal inherits from sql::Expression.
 struct Literal
 {
@@ -143,17 +228,19 @@ struct Literal
     return std::make_unique<sql::Literal>(variant);
   }
 };
+
+
 struct PropertyKeyName
 {
   SymbolicName symbolicName;
   
   friend bool operator<(const PropertyKeyName&a, const PropertyKeyName&b)
   {
-    return a.symbolicName < b.symbolicName;
+    return a.symbolicName.str < b.symbolicName.str;
   }
   friend bool operator==(const PropertyKeyName&a, const PropertyKeyName&b)
   {
-    return a.symbolicName == b.symbolicName;
+    return a.symbolicName.str == b.symbolicName.str;
   }
 };
 inline PropertyKeyName mkProperty(std::string const & name){
@@ -167,6 +254,7 @@ inline std::ostream& operator<<(std::ostream& os, const PropertyKeyName& p)
 }
 
 } // NS
+
 
 enum class IsNullable{ Yes, No };
 
@@ -199,32 +287,78 @@ struct PropertySchema
   }
 };
 
+
+// Represents information related to an openCypher variable when building a SQL query.
+//
+// When building the system relationships query, only |cypherPropertyToSQLQueryColumnName| and |typeIndexSQLQueryColumn| are used :
+//   |cypherPropertyToSQLQueryColumnName| is used to map the ID property field.
+//
+// When building a typed property table query, only |variableLabel| is used.
+struct VarQueryInfo {
+  
+  VarQueryInfo(const openCypher::IndexedLabels & indexedTypes)
+  : allElementTypes(indexedTypes)
+  {}
+  
+  // How the property names should be serialized in the query.
+  std::map<openCypher::PropertyKeyName, sql::QueryColumnName> cypherPropertyToSQLQueryColumnName;
+  
+  // The column name representing the type index in the query.
+  std::optional<sql::QueryColumnName> typeIndexSQLQueryColumn;
+  
+  // when this has a value, we can assume the variable has these labels.
+  std::optional<std::set<openCypher::Label>> variableLabels;
+  
+  // The indexed types available for the variable "kind" (i.e node or relationship) in the DB
+  std::reference_wrapper<const openCypher::IndexedLabels> allElementTypes;
+};
+
+
 namespace openCypher
 {
 
-using VarsAndProperties = std::map<Variable, std::set<PropertyKeyName>>;
+struct VarUsage
+{
+  // These properties of the variable are used
+  std::set<PropertyKeyName> properties;
 
-inline void merge(VarsAndProperties&& v, VarsAndProperties& res)
+  // A label constraint is used with this variable.
+  bool usedInLabelConstraints{};
+  
+  bool operator <(VarUsage const & other) const
+  {
+    return std::tie(usedInLabelConstraints, properties) <
+    std::tie(other.usedInLabelConstraints, other.properties);
+  }
+};
+
+using VarsUsages = std::map<Variable, VarUsage>;
+
+inline void merge(VarsUsages&& v, VarsUsages& res)
 {
   if(res.empty())
     res = std::move(v);
   else
   {
-    for(auto& [var, properties] : v)
+    for(auto& [var, varUsage1] : v)
     {
-      auto & props = res[var];
-      if(props.empty())
-        props = std::move(properties);
+      VarUsage & varUsage2 = res[var];
+
+      if(varUsage1.usedInLabelConstraints)
+        varUsage2.usedInLabelConstraints = true;
+
+      if(varUsage2.properties.empty())
+        varUsage2.properties = std::move(varUsage1.properties);
       else
-        for(const auto& prop : properties)
-          props.insert(prop);
+        for(const auto& prop : varUsage1.properties)
+          varUsage2.properties.insert(prop);
     }
   }
 }
 
 struct Expression;
 
-using ExpressionsByVarAndProperties = std::map<VarsAndProperties, std::vector<const Expression*>>;
+using ExpressionsByVarsUsages = std::map<VarsUsages, std::vector<const Expression*>>;
 
 // Definitions for terms used in comments:
 //
@@ -288,13 +422,13 @@ struct Expression
   //
   // 10 is not an equi-var expression:
   // - 10 uses variables 'a' (with property 'type'), and variable 'b' (with property 'type')
-  virtual void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const = 0;
+  virtual void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const = 0;
 
-  virtual VarsAndProperties varsAndProperties() const = 0;
+  virtual VarsUsages varsUsages() const = 0;
   // throws if the translation is not supported yet.
   virtual std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
-                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const = 0;
+                      const std::map<Variable, VarQueryInfo>& varsQueryInfo) const = 0;
 };
 
 // This helper class wraps the std::vector<std::unique_ptr<Expression>> in a shared_ptr
@@ -364,7 +498,7 @@ struct AggregateExpression : public Expression
   }
   const std::vector<std::unique_ptr<Expression>>& subExpressions() const { return m_subExprs.get(); }
 
-  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
+  void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
   {
     switch(m_aggregator)
     {
@@ -376,7 +510,7 @@ struct AggregateExpression : public Expression
         throw std::logic_error("Xor is not supported");
         break;
       case Aggregator::OR:
-        exprs[varsAndProperties()].push_back(this);
+        exprs[varsUsages()].push_back(this);
         break;
       case Aggregator::AND:
         for(const auto & exp: subExpressions())
@@ -391,29 +525,29 @@ struct AggregateExpression : public Expression
               continue;
             }
           }
-          exprs[exp->varsAndProperties()].push_back(exp.get());
+          exprs[exp->varsUsages()].push_back(exp.get());
         }
         break;
     }
   }
 
-  VarsAndProperties varsAndProperties() const override
+  VarsUsages varsUsages() const override
   {
-    VarsAndProperties res;
+    VarsUsages res;
     for(const auto & exp: subExpressions())
     {
-      merge(exp->varsAndProperties(), res);
+      merge(exp->varsUsages(), res);
     }
     return res;
   }
 
   std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
-                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
+                      const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
   {
     std::vector<std::unique_ptr<sql::Expression>> sqlSubExprs;
     for(auto const & exp : m_subExprs.get())
-      sqlSubExprs.push_back(exp->toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL));
+      sqlSubExprs.push_back(exp->toSQLExpressionTree(sqlFields, varsQueryInfo));
     return std::make_unique<sql::AggregateExpression>(toSqlAggregator(aggregator()), std::move(sqlSubExprs));
   }
 
@@ -430,10 +564,12 @@ private:
   Aggregator m_aggregator;
 };
 
+
 struct Atom
 {
   std::variant<Variable, Literal, AggregateExpression> var;
 };
+
 
 struct NonArithmeticOperatorExpression : public Expression
 {
@@ -450,7 +586,7 @@ struct NonArithmeticOperatorExpression : public Expression
     return ptr;
   };
   
-  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
+  void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
   {
     if(mayPropertyName.has_value())
       throw std::logic_error("asMaximalANDAggregation not implemented for NonArithmeticOperatorExpression that has a property name");
@@ -461,7 +597,7 @@ struct NonArithmeticOperatorExpression : public Expression
       {
         if(labels.empty())
           throw std::logic_error("asMaximalANDAggregation expects a label for a variable.");
-        exprs[varsAndProperties()].push_back(this);
+        exprs[varsUsages()].push_back(this);
       }
       else if constexpr (std::is_same_v<T, Literal>)
         throw std::logic_error("asMaximalANDAggregation didn't expect a literal.");
@@ -472,16 +608,18 @@ struct NonArithmeticOperatorExpression : public Expression
     }, atom.var);
   }
 
-  VarsAndProperties varsAndProperties() const override
+  VarsUsages varsUsages() const override
   {
-    return std::visit([&](auto && arg) -> VarsAndProperties {
+    return std::visit([&](auto && arg) -> VarsUsages {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, Variable>)
       {
-        VarsAndProperties res;
-        auto & props = res[arg];
+        VarsUsages res;
+        auto & varUsage = res[arg];
         if(mayPropertyName.has_value())
-          props.insert(*mayPropertyName);
+          varUsage.properties.insert(*mayPropertyName);
+        if(!labels.empty())
+          varUsage.usedInLabelConstraints = true;
         return res;
       }
       else if constexpr (std::is_same_v<T, Literal>)
@@ -490,7 +628,7 @@ struct NonArithmeticOperatorExpression : public Expression
       }
       else if constexpr (std::is_same_v<T, AggregateExpression>)
       {
-        return arg.varsAndProperties();
+        return arg.varsUsages();
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
@@ -499,32 +637,72 @@ struct NonArithmeticOperatorExpression : public Expression
 
   std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
-                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
+                      const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
   {
-    using detail::asStringSet;
     return std::visit([&](auto && arg) -> std::unique_ptr<sql::Expression> {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, Variable>)
       {
+        const auto itVarInfo = varsQueryInfo.find(arg);
+        if(itVarInfo == varsQueryInfo.end())
+          throw std::logic_error("toSQLExpressionTree doesn't have required information for the var.");
+
+        const VarQueryInfo& info = itVarInfo->second;
+
         if(!mayPropertyName.has_value())
         {
           if(labels.empty())
-            throw std::logic_error("cannot use a raw variable in SQL, need to have a property");
+            throw std::logic_error("cannot use a raw variable in SQL, need to have a property or a label constraint");
           else
-            return std::make_unique<sql::AllowedTypes>(asStringSet(labels));
+          {
+            if(info.variableLabels.has_value())
+            {
+              const bool labelConstraintOK = [&]()
+              {
+                for(const auto & requiredLabel : labels.labels)
+                  if(!info.variableLabels->count(requiredLabel))
+                    return false;
+                return true;
+              }();
+              if(labelConstraintOK)
+                return std::make_unique<sql::True>();
+              else
+                return std::make_unique<sql::False>();
+            }
+            else
+            {
+              // we don't know which label(s) the elements corresponding ot the variable will have
+              if(!info.typeIndexSQLQueryColumn.has_value())
+                throw std::logic_error("toSQLExpressionTree: var info must either have labels or type index sql query column.");
+              std::set<sql::ElementTypeIndex> typeIndices;
+              for(const auto & label: labels.labels)
+              {
+                if(auto index = info.allElementTypes.get().getIfExists(label))
+                  typeIndices.insert(*index);
+                else
+                  // a required label does not exist as type in the DB.
+                  return std::make_unique<sql::False>();
+              }
+              return std::make_unique<sql::ElementLabelsConstraints>(*info.typeIndexSQLQueryColumn, typeIndices);
+            }
+          }
         }
-        // The ValueType is ignored when comparing keys.
-        if(0 == sqlFields.count(PropertySchema{*mayPropertyName, ValueType::String}))
+        if(0 == sqlFields.count(PropertySchema{
+          *mayPropertyName,
+          // The ValueType is ignored when comparing keys so we can use any ValueType here.
+          ValueType::String}))
+        {
           // The property is not a SQL field so we return a null node.
           return std::make_unique<sql::Null>();
+        }
         else
         {
-          // The property is a SQL field so we return it.
+          // The property is a SQL Table Column so we return it.
           
-          if(const auto it = propertyMappingCypherToSQL.find(arg); it != propertyMappingCypherToSQL.end())
-            if(const auto it2 = it->second.find(*mayPropertyName); it2 != it->second.end())
-              return std::make_unique<sql::Field>(it2->second);
-          return std::make_unique<sql::Field>(mayPropertyName->symbolicName.str);
+          if(const auto it = info.cypherPropertyToSQLQueryColumnName.find(*mayPropertyName); it != info.cypherPropertyToSQLQueryColumnName.end())
+            return std::make_unique<sql::QueryColumn>(it->second);
+          // The contract is that the caller will use the property name as query column name.
+          return std::make_unique<sql::QueryColumn>(sql::QueryColumnName{mayPropertyName->symbolicName.str});
         }
       }
       else if constexpr (std::is_same_v<T, Literal>)
@@ -535,14 +713,14 @@ struct NonArithmeticOperatorExpression : public Expression
       }
       else if constexpr (std::is_same_v<T, AggregateExpression>)
       {
-        return arg.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
+        return arg.toSQLExpressionTree(sqlFields, varsQueryInfo);
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     },atom.var);
   }
-
 };
+
 
 struct PartialComparisonExpression{
   Comparison comp;
@@ -561,21 +739,21 @@ struct ComparisonExpression : public Expression {
     return ptr;
   };
 
-  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
+  void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
   {
-    exprs[varsAndProperties()].push_back(this);
+    exprs[varsUsages()].push_back(this);
   }
-  VarsAndProperties varsAndProperties() const override
+  VarsUsages varsUsages() const override
   {
-    VarsAndProperties left = leftExp.varsAndProperties();
-    VarsAndProperties right = partial.rightExp.varsAndProperties();
+    VarsUsages left = leftExp.varsUsages();
+    VarsUsages right = partial.rightExp.varsUsages();
     merge(std::move(right), left);
     return left;
   }
 
   std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
-                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
+                      const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
   {
     // At this point we can have these cases:
     //
@@ -589,8 +767,8 @@ struct ComparisonExpression : public Expression {
     // node = otherNode
     // node = 1
 
-    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
-    std::unique_ptr<sql::Expression> right = partial.rightExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
+    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, varsQueryInfo);
+    std::unique_ptr<sql::Expression> right = partial.rightExp.toSQLExpressionTree(sqlFields, varsQueryInfo);
     return std::make_unique<sql::ComparisonExpression>(std::move(left), partial.comp, std::move(right));
   }
 };
@@ -613,20 +791,20 @@ struct StringListNullPredicateExpression : public Expression {
     return ptr;
   };
   
-  void asMaximalANDAggregation(ExpressionsByVarAndProperties& exprs) const override
+  void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
   {
-    exprs[varsAndProperties()].push_back(this);
+    exprs[varsUsages()].push_back(this);
   }
-  VarsAndProperties varsAndProperties() const override
+  VarsUsages varsUsages() const override
   {
-    return leftExp.varsAndProperties();
+    return leftExp.varsUsages();
   }
   
   std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
-                      const std::map<Variable, std::map<PropertyKeyName, std::string>>& propertyMappingCypherToSQL) const override
+                      const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
   {
-    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
+    std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, varsQueryInfo);
     std::unique_ptr<sql::Expression> right = inList.toSQLExpressionTree();
     return std::make_unique<sql::StringListNullPredicateExpression>(std::move(left), std::move(right));
   }
@@ -638,10 +816,13 @@ struct WhereClause{
   std::shared_ptr<Expression> exp;
 };
 
+
 struct Match{
   Pattern pattern;
   std::optional<WhereClause> where;
 };
+
+
 struct ReadingClause{
   // todo support UNWIND
   Match match;
@@ -650,14 +831,18 @@ struct ReadingClause{
 // Not used yet in valid cases.
 struct ListOperatorExpression{};
 
+
 struct ProjectionItems
 {
   std::vector<NonArithmeticOperatorExpression> naoExps;
 };
 
+
 struct Limit {
   size_t maxCountRows;
 };
+
+
 struct ProjectionBody{
   std::optional<Limit> limit;
   ProjectionItems items;
@@ -668,9 +853,13 @@ struct SinglePartQuery{
   std::optional<ReadingClause> mayReadingClause;
   Return returnClause;
 };
+
+
 struct SingleQuery{
   SinglePartQuery singlePartQuery;
 };
+
+
 // Will be needed later
 /*
  struct FunctionName{
@@ -678,6 +867,8 @@ struct SingleQuery{
  std::string funcName;
  };
  */
+
+
 struct IdentityFunction{};
 
 } // NS

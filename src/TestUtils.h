@@ -189,7 +189,7 @@ struct QueryResultsHandler
   
   // Runs the openCypher query |cypherQuery| with optional parameters |Params|.
   void run(const std::string &cypherQuery,
-           const std::map<SymbolicName, HomogeneousNonNullableValues>& Params = {});
+           const std::map<ParameterName, HomogeneousNonNullableValues>& Params = {});
 
   bool printCypherAST() const { return m_printCypherAST; }
     

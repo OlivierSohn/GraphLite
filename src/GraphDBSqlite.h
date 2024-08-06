@@ -17,7 +17,7 @@
 #include "GraphDBSqliteTypes.h"
 
 
-// Node and relationship IDs.
+// Nodes and relationships IDs.
 template<typename ID_T = int64_t>
 struct GraphDB
 {
@@ -35,7 +35,7 @@ struct GraphDB
   using SymbolicName = openCypher::SymbolicName;
   using PropertyKeyName = openCypher::PropertyKeyName;
   using TraversalDirection = openCypher::TraversalDirection;
-  using ExpressionsByVarAndProperties = openCypher::ExpressionsByVarAndProperties;
+  using ExpressionsByVarsUsages = openCypher::ExpressionsByVarsUsages;
 
   // @param dbPath : DB file path. If this parameter is std::nullopt, the DB file path is c_defaultDBPath.
   // @param overwrite :
@@ -76,7 +76,7 @@ struct GraphDB
   void forEachElementPropertyWithLabelsIn(const Variable& var,
                                           const Element,
                                           const std::vector<ReturnClauseTerm>& propertyNames,
-                                          const std::set<std::string>& labels,
+                                          const openCypher::Labels& labels,
                                           const std::vector<const Expression*>* filter,
                                           const std::optional<Limit>& limit,
                                           FuncResults& f);
@@ -88,7 +88,7 @@ struct GraphDB
   void forEachPath(const std::vector<TraversalDirection>& traversalDirections,
                    const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
                    const std::vector<PathPatternElement>& pathPattern,
-                   const ExpressionsByVarAndProperties& allFilters,
+                   const ExpressionsByVarsUsages& allFilters,
                    const std::optional<Limit>& limit,
                    FuncResults& f);
   
@@ -111,13 +111,13 @@ private:
   };
   
   sqlite3* m_db{};
-  IndexedTypes<size_t> m_indexedNodeTypes;
-  IndexedTypes<size_t> m_indexedRelationshipTypes;
+  openCypher::IndexedLabels m_indexedNodeTypes;
+  openCypher::IndexedLabels m_indexedRelationshipTypes;
   // auto-increment integer table columns start at 1 in sqlite.
   static constexpr size_t c_noType = 0ull;
 
   // key : namedType.
-  std::unordered_map<std::string, std::set<PropertySchema>> m_properties;
+  std::unordered_map<openCypher::Label, std::set<PropertySchema>> m_properties;
   
   const FuncOnSQLQuery m_fOnSQLQuery;
   const FuncOnSQLQueryDuration m_fOnSQLQueryDuration;
@@ -128,19 +128,20 @@ private:
   std::unique_ptr<SQLPreparedStatement> m_addNodePreparedStatement;
   std::unique_ptr<SQLPreparedStatement> m_addNodeWithIDPreparedStatement;
 
-  using AddElementPreparedStatementKey = std::pair<std::string /* type name */, std::vector<PropertyKeyName>>;
+  using AddElementPreparedStatementKey = std::pair<openCypher::Label, std::vector<PropertyKeyName>>;
   std::map<AddElementPreparedStatementKey, std::unique_ptr<SQLPreparedStatement>> m_addElementPreparedStatements;
 
-  std::set<std::string> computeLabels(const Element, const std::set<std::string>& inputLabels) const;
-  std::vector<size_t> labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const;
+  // The input labels are AND-ed labels constraints
+  // The returned labels are OR-ed allowed labels
+  std::set<openCypher::Label> computeAllowedLabels(const Element, const openCypher::Labels& inputLabels) const;
   
-  void validatePropertyValues(const std::string& typeName,
+  void validatePropertyValues(const openCypher::Label& typeName,
                               const std::vector<std::pair<PropertyKeyName, Value>>& propValues) const;
   
   [[nodiscard]]
-  bool findValidProperties(const std::string& typeName, const std::vector<PropertyKeyName>& propNames, std::vector<bool>& valid) const;
+  bool findValidProperties(const openCypher::Label& typeName, const std::vector<PropertyKeyName>& propNames, std::vector<bool>& valid) const;
   
-  void addElement(const std::string& typeName,
+  void addElement(const openCypher::Label& typeName,
                   const ID& id,
                   const std::vector<std::pair<PropertyKeyName, Value>>& propValues);
   
@@ -148,27 +149,42 @@ private:
   
   struct VariablePostFilters{
     // These are the properties used in filters.
-    std::set<PropertyKeyName> properties;
+    std::set<openCypher::PropertyKeyName> properties;
     
-    std::vector<const Expression*> filters;
+    std::vector<const openCypher::Expression*> filters;
   };
-  
-  void analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
-                      std::vector<const Expression*>& idFilters,
-                      std::map<Variable, VariablePostFilters>& postFilters) const;
+
+  // @param idAndLabelFilters: contains AND-ed constraints that can be applied in the system relationships query.
+  // @param postFilters: contains AND-ed constraints that can be applied in the typed property tables query.
+  //
+  // The function throws if it encounters a constraint that cannot be applied.
+  void analyzeFilters(const ExpressionsByVarsUsages& allFilters,
+                      const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
+                      std::vector<const Expression*>& idAndLabelFilters,
+                      std::map<Variable, VariablePostFilters>& postFilters,
+                      std::map<Variable, VariableInfo>& varInfo) const;
   
   // Whether the type (aka label) information of a node or relationship needs to be returned from the relationships system table query.
   bool varRequiresTypeInfo(const Variable& var,
                            const std::vector<ReturnClauseTerm>& returnedProperties,
                            const std::map<Variable, VariablePostFilters>& postFilters) const;
   
-  enum class LabelAssociation{AND, OR};
+  std::optional<std::set<sql::ElementTypeIndex>> computeTypeFilter(const Element e,
+                                                                   openCypher::Labels const & labels);
+    
+  static std::string mkFilterTypesConstraint(const std::set<sql::ElementTypeIndex>& typesFilter, sql::QueryColumnName const& typeColumn);
 
-  std::optional<std::set<size_t>> computeTypeFilter(const Element e,
-                                                    const LabelAssociation,
-                                                    std::set<std::string> const & nodeLabelsStr);
-  
-  static std::string mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn);
+  // Note that there are 2 "modes" for this function:
+  // - the function is called with an empty elementType and a non-empty varsQueryInfo
+  //   when we build a sql filter for the system relationships query, or
+  // - the function is called with a non-empty elementType and an empty varsQueryInfo
+  //   when we build a sql filter for a typed property table.
+  [[nodiscard]]
+  bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
+                             const std::set<PropertySchema>& sqlFields,
+                             const std::map<openCypher::Variable, VarQueryInfo>& varsQueryInfo,
+                             std::string& sqlFilter,
+                             sql::QueryVars & vars) const;
 
   void gatherPropertyValues(const Variable& var,
                             std::vector<std::unordered_set<ID>>&& elemsByType,
@@ -258,4 +274,6 @@ private:
     if(ps.run(callback, cbParam, nullptr))
       throw std::logic_error("Run: " + std::string{sqlite3_errmsg(m_db)});
   }
+  
+  VarQueryInfo& insert(const Element elem, const Variable & var, std::map<Variable, VarQueryInfo>& varQueryInfo) const;
 };

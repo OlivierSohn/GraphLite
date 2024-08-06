@@ -58,7 +58,7 @@ void runSingleQuery(const SingleQuery& q,
   if(mpp.mayVariable.has_value())
     throw std::logic_error("Not Implemented (Expected no variable before match pattern)");
   
-  ExpressionsByVarAndProperties whereExprsByVarsAndproperties;
+  ExpressionsByVarsUsages whereExprsByVarsAndproperties;
   
   if(spq.mayReadingClause->match.where.has_value())
     // If the tree is not Equi-var, an exception is thrown.
@@ -109,7 +109,7 @@ void runSingleQuery(const SingleQuery& q,
     if(app.firstNodePattern.mayVariable.has_value())
       variables[*app.firstNodePattern.mayVariable] = mkReturnedProperties(*app.firstNodePattern.mayVariable);
     pathPatternElements.emplace_back(app.firstNodePattern.mayVariable,
-                                     asStringSet(app.firstNodePattern.labels));
+                                     app.firstNodePattern.labels);
 
     std::vector<TraversalDirection> traversalDirections;
 
@@ -120,12 +120,12 @@ void runSingleQuery(const SingleQuery& q,
       if(pec.relPattern.mayVariable.has_value())
         variables[*pec.relPattern.mayVariable] = mkReturnedProperties(*pec.relPattern.mayVariable);
       pathPatternElements.emplace_back(pec.relPattern.mayVariable,
-                                       asStringSet(pec.relPattern.labels));
+                                       pec.relPattern.labels);
 
       if(pec.nodePattern.mayVariable.has_value())
         variables[*pec.nodePattern.mayVariable] = mkReturnedProperties(*pec.nodePattern.mayVariable);
       pathPatternElements.emplace_back(pec.nodePattern.mayVariable,
-                                       asStringSet(pec.nodePattern.labels));
+                                       pec.nodePattern.labels);
     }
     
     {
@@ -192,13 +192,11 @@ void runSingleQuery(const SingleQuery& q,
         throw std::logic_error("A variable used in the where clause was not defined.");
     filter.insert(filter.end(), exprs.begin(), exprs.end());
   }
-  
-  const std::set<std::string> labelsStr = asStringSet(labels);
-  
+    
   db.forEachElementPropertyWithLabelsIn(variable,
                                         elem,
                                         properties,
-                                        labelsStr,
+                                        labels,
                                         &filter,
                                         limit,
                                         f);

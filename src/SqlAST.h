@@ -25,6 +25,27 @@ enum class CountLabelsPerElement
 namespace sql
 {
 
+// Index of the type of an element (node or relationship)
+struct ElementTypeIndex
+{
+  ElementTypeIndex() : ElementTypeIndex(std::numeric_limits<size_t>::max()) {}
+
+  ElementTypeIndex(size_t i)
+  : m_index(i)
+  {}
+
+  size_t unsafeGet() const { return m_index; }
+
+  bool operator < (ElementTypeIndex const & other) const
+  { return m_index < other.m_index; }
+  friend bool operator == (ElementTypeIndex const & a, ElementTypeIndex const & b)
+  { return a.m_index == b.m_index; }
+
+private:
+  size_t m_index;
+};
+
+
 struct QueryVars
 {
   // There is a convention in sqlite to identify bound variables by their position in the query.
@@ -88,9 +109,9 @@ struct Expression
 {
   virtual ~Expression() = default;
 
-  virtual std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const = 0;
+  virtual std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const = 0;
   
-  virtual void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const = 0;
+  virtual void toString(std::ostream& os, QueryVars& vars) const = 0;
 };
 
 struct Literal : public Expression
@@ -99,9 +120,9 @@ struct Literal : public Expression
   : m_variant(variant)
   {}
 
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override { return std::nullopt; }
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return std::nullopt; }
 
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override {
+  void toString(std::ostream& os, QueryVars& vars) const override {
     std::visit([&](auto && arg) {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, std::shared_ptr<Value>>)
@@ -124,63 +145,95 @@ private:
   mutable std::optional<std::string> m_varName;
 };
 
-struct Field : public Expression
+
+// Represent the name of a table column as it appears in a SQL query,
+// i.e either the same as the table column name, or prefixed by the table name, or aliased, etc...
+struct QueryColumnName {
+  std::string name;
+};
+
+
+inline std::ostream& operator<<(std::ostream& os, const QueryColumnName& p)
 {
-  Field(std::string const& str)
-  : str(str)
+  os << p.name;
+  return os;
+}
+
+
+struct QueryColumn : public Expression
+{
+  QueryColumn(QueryColumnName const& str)
+  : m_name(str)
   {}
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override { return std::nullopt; }
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return std::nullopt; }
+  void toString(std::ostream& os, QueryVars& vars) const override
   {
-    os << str;
+    os << m_name;
   }
 
-  std::string str;
+private:
+  QueryColumnName m_name;
 };
 
 // Represents a null value.
 struct Null : public Expression
 {
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override { return Evaluation::Unknown; }
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override { os << "NULL"; }
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return Evaluation::Unknown; }
+  void toString(std::ostream& os, QueryVars& vars) const override { os << "NULL"; }
 };
 
-// Represents labels that an element must have (constraints are AND-ed together).
-struct AllowedTypes : public Expression
+// Represents a TRUE value.
+struct True : public Expression
 {
-  AllowedTypes(const std::set<std::string>& typesANDed)
-  : typesANDed(typesANDed)
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return Evaluation::True; }
+  void toString(std::ostream& os, QueryVars& vars) const override { os << "TRUE"; }
+};
+
+// Represents a FALSE value.
+struct False : public Expression
+{
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return Evaluation::False; }
+  void toString(std::ostream& os, QueryVars& vars) const override { os << "FALSE"; }
+};
+
+struct ElementLabelsConstraints : public Expression
+{
+  // |typeIndexQueryColumn| is the name of the sql query column that will hold the type index information.
+  // |labelsConstraintsANDed| are the labels that the element must have.
+  ElementLabelsConstraints(const QueryColumnName& typeIndexQueryColumn,
+                           const std::set<ElementTypeIndex>& labelsConstraintsANDed)
+  : m_typeConstraintsANDed(labelsConstraintsANDed)
+  , m_typeIndexQueryColumn(typeIndexQueryColumn)
   {}
 
-  std::set<std::string> typesANDed;
-
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override {
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
+  {
     if(countLabelsPerElement == CountLabelsPerElement::One)
-      if(typesANDed.size() >= 2)
+      if(m_typeConstraintsANDed.size() >= 2)
         return Evaluation::False;
-    if(elementType.has_value())
-    {
-      if(typesANDed.count(*elementType))
-        return Evaluation::True;
-      else
-        return Evaluation::False;
-    }
-    else
-      return Evaluation::Unknown;
+    return Evaluation::Unknown;
   }
   
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override {
-    if(auto eval = tryEvaluate(countLabelsPerElement, elementType))
+  void toString(std::ostream& os, QueryVars& vars) const override
+  {
+    os << m_typeIndexQueryColumn << " IN ( ";
+
+    bool first = true;
+    for(const auto & typeIndex : m_typeConstraintsANDed)
     {
-      if(*eval == Evaluation::True)
-        os << " TRUE ";
+      if(first)
+        first = false;
       else
-        os << " FALSE ";
+        os << ", ";
+      os << typeIndex.unsafeGet();
     }
-    else
-      // In the future for the multi-label case we will lookup the label in a json array.
-      throw std::logic_error("Not implemented (elementType has no value)");
+
+    os << " ) ";
   }
+
+private:
+  std::set<ElementTypeIndex> m_typeConstraintsANDed;
+  QueryColumnName m_typeIndexQueryColumn;
 };
 
 struct ComparisonExpression : public Expression {
@@ -190,10 +243,10 @@ struct ComparisonExpression : public Expression {
   , m_right(std::move(right))
   {}
 
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
   {
-    auto leftEval = m_left->tryEvaluate(countLabelsPerElement, elementType);
-    auto rightEval = m_right->tryEvaluate(countLabelsPerElement, elementType);
+    auto leftEval = m_left->tryEvaluate(countLabelsPerElement);
+    auto rightEval = m_right->tryEvaluate(countLabelsPerElement);
     if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
       return Evaluation::Unknown;
     if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
@@ -217,13 +270,13 @@ struct ComparisonExpression : public Expression {
     return std::nullopt;
   }
 
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override
+  void toString(std::ostream& os, QueryVars& vars) const override
   {
-    m_left->toString(os, countLabelsPerElement, elementType, vars);
+    m_left->toString(os, vars);
     os << " ";
     os << toStr(m_comp);
     os << " ";
-    m_right->toString(os, countLabelsPerElement, elementType, vars);
+    m_right->toString(os, vars);
   }
 
 private:
@@ -249,12 +302,12 @@ struct StringListNullPredicateExpression : public Expression {
     m_type = *type;
   }
   
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
   {
     // This works for the List case i.e "a.prop IN [1, 2]",
     // but might need to be revisited for otehr cases when we support them.
-    auto leftEval = m_left->tryEvaluate(countLabelsPerElement, elementType);
-    auto rightEval = m_right->tryEvaluate(countLabelsPerElement, elementType);
+    auto leftEval = m_left->tryEvaluate(countLabelsPerElement);
+    auto rightEval = m_right->tryEvaluate(countLabelsPerElement);
     if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
       return Evaluation::Unknown;
     if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
@@ -262,11 +315,11 @@ struct StringListNullPredicateExpression : public Expression {
     return std::nullopt;
   }
   
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override
+  void toString(std::ostream& os, QueryVars& vars) const override
   {
-    m_left->toString(os, countLabelsPerElement, elementType, vars);
+    m_left->toString(os, vars);
     os << " IN ";
-    m_right->toString(os, countLabelsPerElement, elementType, vars);
+    m_right->toString(os, vars);
   }
   
 private:
@@ -303,7 +356,7 @@ struct AggregateExpression : public Expression
   , m_subExprs(std::move(sub))
   {}
 
-  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType) const override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
   {
     switch(m_aggregator)
     {
@@ -313,7 +366,7 @@ struct AggregateExpression : public Expression
         bool hasNonEvaluated{};
         for(const auto & subExpr : m_subExprs)
         {
-          if(auto subEval = subExpr->tryEvaluate(countLabelsPerElement, elementType))
+          if(auto subEval = subExpr->tryEvaluate(countLabelsPerElement))
           {
             switch(*subEval)
             {
@@ -343,7 +396,7 @@ struct AggregateExpression : public Expression
         bool hasNonEvaluated{};
         for(const auto & subExpr : m_subExprs)
         {
-          if(auto subEval = subExpr->tryEvaluate(countLabelsPerElement, elementType))
+          if(auto subEval = subExpr->tryEvaluate(countLabelsPerElement))
           {
             switch(*subEval)
             {
@@ -370,7 +423,7 @@ struct AggregateExpression : public Expression
     throw std::logic_error("invalid enum value");
   }
 
-  void toString(std::ostream& os, const CountLabelsPerElement countLabelsPerElement, std::optional<std::string> const& elementType, QueryVars& vars) const override {
+  void toString(std::ostream& os, QueryVars& vars) const override {
     bool first = true;
     for(const auto & subExpr : m_subExprs)
     {
@@ -379,7 +432,7 @@ struct AggregateExpression : public Expression
       else
         os << toStr(m_aggregator);
       os << " (";
-      subExpr->toString(os, countLabelsPerElement, elementType, vars);
+      subExpr->toString(os, vars);
       os << ") ";
     }
   }
@@ -387,6 +440,19 @@ struct AggregateExpression : public Expression
 private:
   Aggregator m_aggregator;
   std::vector<std::unique_ptr<Expression>> m_subExprs;
+};
+
+}
+
+namespace std
+{
+template<>
+struct hash<sql::ElementTypeIndex>
+{
+  size_t operator()(const sql::ElementTypeIndex& i) const
+  {
+    return std::hash<size_t>()(i.unsafeGet());
+  }
 };
 
 }

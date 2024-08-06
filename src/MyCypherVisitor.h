@@ -12,7 +12,7 @@ class MyCypherVisitor : public CypherVisitor
 {
 public:
   MyCypherVisitor(PropertySchema const& IDProperty,
-                  const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
+                  const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
                   bool print = false)
   : m_print(print)
   , m_IDProperty(IDProperty)
@@ -248,7 +248,7 @@ private:
   std::any aggregate(const Aggregator a, const std::vector<U>& subExpressions);
   
   PropertySchema const& m_IDProperty;
-  std::map<SymbolicName, HomogeneousNonNullableValues> m_queryParams;
+  std::map<ParameterName, HomogeneousNonNullableValues> m_queryParams;
   bool m_print;
   std::vector<std::string> m_errors;
 };

@@ -491,7 +491,7 @@ std::any MyCypherVisitor::visitOC_RelationshipTypes(CypherParser::OC_Relationshi
   {
     auto res = child->accept(this);
     if(res.type() == typeid(Label))
-      labels.labels.push_back(std::move(std::any_cast<Label>(res)));
+      labels.labels.insert(std::move(std::any_cast<Label>(res)));
   }
   return labels;
 }
@@ -503,7 +503,7 @@ std::any MyCypherVisitor::visitOC_NodeLabels(CypherParser::OC_NodeLabelsContext 
   {
     auto res = child->accept(this);
     if(res.type() == typeid(Label))
-      labels.labels.push_back(std::move(std::any_cast<Label>(res)));
+      labels.labels.insert(std::move(std::any_cast<Label>(res)));
   }
   return labels;
 }
@@ -1126,7 +1126,7 @@ std::any MyCypherVisitor::visitOC_Parameter(CypherParser::OC_ParameterContext *c
     if(paramName.type() == typeid(SymbolicName))
     {
       const auto & sn = std::any_cast<SymbolicName>(paramName);
-      auto it = m_queryParams.find(sn);
+      auto it = m_queryParams.find(ParameterName{sn});
       if(it != m_queryParams.end())
         // only list literals are supported for now.
         return Literal{it->second};
