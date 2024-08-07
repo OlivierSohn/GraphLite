@@ -20,44 +20,6 @@
 #include "CypherAST.h"
 
 
-template<typename Index>
-struct IndexedTypes
-{
-  std::optional<Index> getIfExists(std::string const & type) const
-  {
-    auto it = typeToIndex.find(type);
-    if(it == typeToIndex.end())
-      return {};
-    return it->second;
-  }
-  const std::string* getIfExists(Index const type) const
-  {
-    auto it = indexToType.find(type);
-    if(it == indexToType.end())
-      return {};
-    return &it->second;
-  }
-
-  void add(Index idx, std::string const & name)
-  {
-    auto it = typeToIndex.find(name);
-    if(it != typeToIndex.end())
-      throw std::logic_error("duplicate type");
-    typeToIndex[name] = idx;
-    indexToType[idx] = name;
-    m_maxIndex = std::max(idx, m_maxIndex.value_or(std::numeric_limits<Index>::lowest()));
-  }
-
-  const std::unordered_map<std::string, Index>& getTypeToIndex() const { return typeToIndex; }
-
-  const std::optional<Index> getMaxIndex() const { return m_maxIndex; }
-private:
-  std::unordered_map<std::string, Index> typeToIndex;
-  std::unordered_map<Index, std::string> indexToType;
-  std::optional<Index> m_maxIndex;
-};
-
-
 enum class Element{
   Node,
   Relationship
@@ -75,13 +37,14 @@ struct ReturnClauseTerm
 struct PathPatternElement
 {
   PathPatternElement(const std::optional<openCypher::Variable>& var,
-                     const std::vector<std::string>& labels)
+                     const openCypher::Labels& labels)
   : var(var)
   , labels(labels)
   {}
 
   std::optional<openCypher::Variable> var;
-  std::vector<std::string> labels;
+
+  openCypher::Labels labels;
 };
 
 enum class Overwrite{Yes, No};

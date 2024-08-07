@@ -22,13 +22,43 @@
 #include <iostream>
 #include <sstream>
 #include <map>
+#include <set>
 
 #include "Value.h"
 
 template < typename > constexpr bool c_false = false;
 
+
+// Whether a node or relationship may have multiple labels or just one.
+enum class CountLabelsPerElement
+{
+  One,
+  Multi
+};
+
 namespace sql
 {
+
+// Index of the type of an element (node or relationship)
+struct ElementTypeIndex
+{
+  ElementTypeIndex() : ElementTypeIndex(std::numeric_limits<size_t>::max()) {}
+
+  ElementTypeIndex(size_t i)
+  : m_index(i)
+  {}
+
+  size_t unsafeGet() const { return m_index; }
+
+  bool operator < (ElementTypeIndex const & other) const
+  { return m_index < other.m_index; }
+  friend bool operator == (ElementTypeIndex const & a, ElementTypeIndex const & b)
+  { return a.m_index == b.m_index; }
+
+private:
+  size_t m_index;
+};
+
 
 struct QueryVars
 {
@@ -67,6 +97,27 @@ enum class Comparison
   LE  // <=
 };
 
+inline Comparison negateComparison(Comparison c)
+{
+  switch(c)
+  {
+    case Comparison::EQ:
+      return Comparison::NE;
+    case Comparison::NE:
+      return Comparison::EQ;
+
+    case Comparison::GT:
+      return Comparison::LE;
+    case Comparison::LE:
+      return Comparison::GT;
+
+    case Comparison::GE:
+      return Comparison::LT;
+    case Comparison::LT:
+      return Comparison::GE;
+  }
+}
+
 // Cypher and SQL comparison strings are the same.
 inline std::string toStr(Comparison cmp)
 {
@@ -89,11 +140,23 @@ enum class Evaluation
   True
 };
 
+inline Evaluation negated(Evaluation e)
+{
+  switch(e)
+  {
+    case Evaluation::False:
+      return Evaluation::True;
+    case Evaluation::True:
+      return Evaluation::False;
+  }
+  return Evaluation::Unknown;
+}
+
 struct Expression
 {
   virtual ~Expression() = default;
 
-  virtual std::optional<Evaluation> tryEvaluate() = 0;
+  virtual std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const = 0;
   
   virtual void toString(std::ostream& os, QueryVars& vars) const = 0;
 };
@@ -104,7 +167,7 @@ struct Literal : public Expression
   : m_variant(variant)
   {}
 
-  std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return std::nullopt; }
 
   void toString(std::ostream& os, QueryVars& vars) const override {
     std::visit([&](auto && arg) {
@@ -129,25 +192,120 @@ private:
   mutable std::optional<std::string> m_varName;
 };
 
-struct Field : public Expression
+
+// Represent the name of a table column as it appears in a SQL query,
+// i.e either the same as the table column name, or prefixed by the table name, or aliased, etc...
+struct QueryColumnName {
+  std::string name;
+};
+
+
+inline std::ostream& operator<<(std::ostream& os, const QueryColumnName& p)
 {
-  Field(std::string const& str)
-  : str(str)
+  os << p.name;
+  return os;
+}
+
+
+struct QueryColumn : public Expression
+{
+  QueryColumn(QueryColumnName const& str)
+  : m_name(str)
   {}
-  std::optional<Evaluation> tryEvaluate() override { return std::nullopt; }
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return std::nullopt; }
   void toString(std::ostream& os, QueryVars& vars) const override
   {
-    os << str;
+    os << m_name;
   }
 
-  std::string str;
+private:
+  QueryColumnName m_name;
 };
 
 // Represents a null value.
 struct Null : public Expression
 {
-  std::optional<Evaluation> tryEvaluate() override { return Evaluation::Unknown; }
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return Evaluation::Unknown; }
   void toString(std::ostream& os, QueryVars& vars) const override { os << "NULL"; }
+};
+
+// Represents a TRUE value.
+struct True : public Expression
+{
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return Evaluation::True; }
+  void toString(std::ostream& os, QueryVars& vars) const override { os << "TRUE"; }
+};
+
+// Represents a FALSE value.
+struct False : public Expression
+{
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override { return Evaluation::False; }
+  void toString(std::ostream& os, QueryVars& vars) const override { os << "FALSE"; }
+};
+
+// Represents a negation.
+struct Not : public Expression
+{
+  Not(std::unique_ptr<Expression> && expr)
+  : m_expr(std::move(expr))
+  {}
+
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
+  {
+    if(std::optional<Evaluation> eval = m_expr->tryEvaluate(countLabelsPerElement))
+      return negated(*eval);
+    return std::nullopt;
+  }
+
+  void toString(std::ostream& os, QueryVars& vars) const override
+  {
+    os << " NOT ( ";
+    m_expr->toString(os, vars);
+    os << " ) ";
+  }
+
+private:
+  std::unique_ptr<Expression> m_expr;
+};
+
+struct ElementLabelsConstraints : public Expression
+{
+  // |typeIndexQueryColumn| is the name of the sql query column that will hold the type index information.
+  // |labelsConstraintsANDed| are the labels that the element must have.
+  ElementLabelsConstraints(const QueryColumnName& typeIndexQueryColumn,
+                           const std::set<ElementTypeIndex>& labelsConstraintsANDed)
+  : m_typeConstraintsANDed(labelsConstraintsANDed)
+  , m_typeIndexQueryColumn(typeIndexQueryColumn)
+  {}
+
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
+  {
+    if(countLabelsPerElement == CountLabelsPerElement::One)
+      if(m_typeConstraintsANDed.size() >= 2)
+        return Evaluation::False;
+    return std::nullopt;
+  }
+  
+  void toString(std::ostream& os, QueryVars& vars) const override
+  {
+    os << m_typeIndexQueryColumn << " IN ( ";
+
+    bool first = true;
+    for(const auto & typeIndex : m_typeConstraintsANDed)
+    {
+      if(first)
+        first = false;
+      else
+        os << ", ";
+      os << typeIndex.unsafeGet();
+    }
+
+    os << " ) ";
+  }
+
+private:
+  std::set<ElementTypeIndex> m_typeConstraintsANDed;
+  QueryColumnName m_typeIndexQueryColumn;
 };
 
 struct ComparisonExpression : public Expression {
@@ -157,10 +315,10 @@ struct ComparisonExpression : public Expression {
   , m_right(std::move(right))
   {}
 
-  std::optional<Evaluation> tryEvaluate() override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
   {
-    auto leftEval = m_left->tryEvaluate();
-    auto rightEval = m_right->tryEvaluate();
+    auto leftEval = m_left->tryEvaluate(countLabelsPerElement);
+    auto rightEval = m_right->tryEvaluate(countLabelsPerElement);
     if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
       return Evaluation::Unknown;
     if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
@@ -186,11 +344,13 @@ struct ComparisonExpression : public Expression {
 
   void toString(std::ostream& os, QueryVars& vars) const override
   {
+    os << " ( ";
     m_left->toString(os, vars);
-    os << " ";
+    os << " ) ";
     os << toStr(m_comp);
-    os << " ";
+    os << " ( ";
     m_right->toString(os, vars);
+    os << " ) ";
   }
 
 private:
@@ -201,8 +361,9 @@ private:
 
 // For now does not support String / Null parts, only List part.
 struct StringListNullPredicateExpression : public Expression {
-  StringListNullPredicateExpression(std::unique_ptr<Expression> && left, std::unique_ptr<Expression> && right)
+  StringListNullPredicateExpression(std::unique_ptr<Expression> && left, bool negate, std::unique_ptr<Expression> && right)
   : m_left(std::move(left))
+  , m_negate(negate)
   , m_right(std::move(right))
   {
     std::optional<Type> type;
@@ -216,12 +377,12 @@ struct StringListNullPredicateExpression : public Expression {
     m_type = *type;
   }
   
-  std::optional<Evaluation> tryEvaluate() override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
   {
     // This works for the List case i.e "a.prop IN [1, 2]",
     // but might need to be revisited for otehr cases when we support them.
-    auto leftEval = m_left->tryEvaluate();
-    auto rightEval = m_right->tryEvaluate();
+    auto leftEval = m_left->tryEvaluate(countLabelsPerElement);
+    auto rightEval = m_right->tryEvaluate(countLabelsPerElement);
     if(leftEval.has_value() && *leftEval == Evaluation::Unknown)
       return Evaluation::Unknown;
     if(rightEval.has_value() && *rightEval == Evaluation::Unknown)
@@ -232,12 +393,15 @@ struct StringListNullPredicateExpression : public Expression {
   void toString(std::ostream& os, QueryVars& vars) const override
   {
     m_left->toString(os, vars);
+    if(m_negate)
+      os << " NOT ";
     os << " IN ";
     m_right->toString(os, vars);
   }
   
 private:
   std::unique_ptr<Expression> m_left;
+  bool m_negate;
   std::unique_ptr<Expression> m_right;
 
   enum class Type{
@@ -270,7 +434,7 @@ struct AggregateExpression : public Expression
   , m_subExprs(std::move(sub))
   {}
 
-  std::optional<Evaluation> tryEvaluate() override
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
   {
     switch(m_aggregator)
     {
@@ -280,7 +444,7 @@ struct AggregateExpression : public Expression
         bool hasNonEvaluated{};
         for(const auto & subExpr : m_subExprs)
         {
-          if(auto subEval = subExpr->tryEvaluate())
+          if(auto subEval = subExpr->tryEvaluate(countLabelsPerElement))
           {
             switch(*subEval)
             {
@@ -310,7 +474,7 @@ struct AggregateExpression : public Expression
         bool hasNonEvaluated{};
         for(const auto & subExpr : m_subExprs)
         {
-          if(auto subEval = subExpr->tryEvaluate())
+          if(auto subEval = subExpr->tryEvaluate(countLabelsPerElement))
           {
             switch(*subEval)
             {
@@ -354,6 +518,19 @@ struct AggregateExpression : public Expression
 private:
   Aggregator m_aggregator;
   std::vector<std::unique_ptr<Expression>> m_subExprs;
+};
+
+}
+
+namespace std
+{
+template<>
+struct hash<sql::ElementTypeIndex>
+{
+  size_t operator()(const sql::ElementTypeIndex& i) const
+  {
+    return std::hash<size_t>()(i.unsafeGet());
+  }
 };
 
 }

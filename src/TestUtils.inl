@@ -53,7 +53,7 @@ GraphWithStats<ID>::GraphWithStats(const std::optional<std::filesystem::path>& d
 
 template<typename ID>
 void QueryResultsHandler<ID>::run(const std::string &cypherQuery,
-                              const std::map<SymbolicName, HomogeneousNonNullableValues>& Params)
+                              const std::map<ParameterName, HomogeneousNonNullableValues>& Params)
 {
   m_db.m_queryStats.clear();
   m_resultOrder.clear();

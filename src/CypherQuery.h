@@ -27,7 +27,7 @@ namespace detail
 {
 SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
                              const std::string& query,
-                             const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
+                             const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
                              bool printCypherAST);
 
 using FOnOrderAndColumnNames = std::function<void(const ResultOrder&,
@@ -47,7 +47,7 @@ void runSingleQuery(const SingleQuery& q,
 
 template<typename ID, typename ResultsHander>
 void runCypher(const std::string& cypherQuery,
-               const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
+               const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
                GraphDB<ID>&db,
                ResultsHander& resultsHandler)
 {

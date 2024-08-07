@@ -132,6 +132,10 @@ int main()
 
   try
   {
+    runCypher("MATCH (`n`) WHERE n:Node1      RETURN id(`n`), `n`.test, `n`.`what`;");
+    runCypher("MATCH (`n`) WHERE n:Node1 AND n:Node2     RETURN id(`n`), `n`.test, `n`.`what`;");
+    runCypher("MATCH (`n`) WHERE n:Node1 OR n.test = 2     RETURN id(`n`), `n`.test, `n`.`what`;");
+    
     runCypher("MATCH (`n`)       RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node1) RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node2) RETURN id(`n`), `n`.test, `n`.`what`;");
@@ -180,8 +184,7 @@ int main()
 
     // todo suport creating an index on a property type.
 
-    // todo optimize LIMIT implementation to reduce the numbers of SQL rows fetched:
-    // when we know we will not post filter we can have the limit clause in the system relationship table.
+    // todo optimize LIMIT implementation for path patterns, to reduce the numbers of SQL rows fetched:
     // when we may post-filter we could use pagination with exponential size increase:
     //     page_size = std::max(10000, 10 * limit->maxCountRows);
     //     then at each iteration
@@ -193,13 +196,19 @@ int main()
     //         (if there is an index on 'name', OR if the number of rows is much smaller than the number of relationships),
     //         using the post filter constraint, and then only query
     //         the system relationships table with id(B) IN (...)
+    //       Generalization: we could first query ids of nodes and relationships that are constrained only by their own properties,
+    //         then inject this information in the system relationships query that assembles the paths.
+    //         Maybe we could be smart and guess how many rows would be returned for different node & relationship types,
+    //         to only pre-filter those that will potentially return few rows,
+    //         and post-filter the rest.
 
-    // todo variable length relationships: (a)-[r1:*..3]->(b)
+    // todo variable-length relationships: (a)-[r1:*..3]->(b)
 
     // todo RETURN entire elements
 
     // todo support non-equi-var expressions, by evaluating them manually before returning results.
     // i.e: WHERE n.weight > 3 OR r.status = 2
+    // i.e: WHERE n.weight > 3 OR r:Rel1
 
     // TODO support UNION
 
@@ -210,9 +219,6 @@ int main()
     //     use these ids to filter the relationships table.
     //   -> create a test example that shows the perf issue before trying to fix it.
     
-    // todo deduce labels from where clause:
-    //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;");
-
     // todo (property value in the node pattern)
     //runCypher("MATCH (`n`:Node1{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;");
     //runCypher("MATCH (`n`:{test=2})-[`r`]->() RETURN id(`r`), `r`.testRel, `r`.`whatRel`, `n`.test;");

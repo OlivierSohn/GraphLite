@@ -25,7 +25,7 @@ namespace openCypher::detail
 {
 SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
                              const std::string& query,
-                             const std::map<SymbolicName, HomogeneousNonNullableValues>& queryParams,
+                             const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
                              const bool printAST)
 {
   auto chars = antlr4::ANTLRInputStream(query);

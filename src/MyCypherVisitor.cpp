@@ -22,7 +22,7 @@ namespace openCypher
 
 namespace detail
 {
-std::unique_ptr<Expression> tryStealAsExpressionPtr(std::any && res)
+std::shared_ptr<Expression> tryStealAsExpressionPtr(std::any && res)
 {
   if(res.type() == typeid(NonArithmeticOperatorExpression))
     return std::any_cast<NonArithmeticOperatorExpression>(res).StealAsPtr();
@@ -335,7 +335,9 @@ std::any MyCypherVisitor::visitOC_Limit(CypherParser::OC_LimitContext *context) 
     {
       const auto & nao = std::any_cast<NonArithmeticOperatorExpression>(res);
       if(nao.mayPropertyName.has_value())
-        m_errors.push_back("OC_Limit expects a no property");
+        m_errors.push_back("OC_Limit expects no property");
+      if(!nao.labels.empty())
+        m_errors.push_back("OC_Limit expects no label");
       const auto count = std::get<int64_t>(*std::get<std::shared_ptr<Value>>(std::get<Literal>(nao.atom.var).variant));
       if(count < 0)
         m_errors.push_back("OC_Limit expects a positive value");
@@ -357,7 +359,7 @@ std::any MyCypherVisitor::visitOC_Where(CypherParser::OC_WhereContext *context) 
 
   auto res = context->oC_Expression()->accept(this);
   if(auto ptr = detail::tryStealAsExpressionPtr(std::move(res)))
-    return WhereClause{std::shared_ptr<Expression>{ptr.release()}};
+    return WhereClause{ptr};
   m_errors.push_back("OC_Where encounterd unsupported expression.");
   return {};
 }
@@ -505,7 +507,7 @@ std::any MyCypherVisitor::visitOC_RelationshipTypes(CypherParser::OC_Relationshi
   {
     auto res = child->accept(this);
     if(res.type() == typeid(Label))
-      labels.labels.push_back(std::move(std::any_cast<Label>(res)));
+      labels.labels.insert(std::move(std::any_cast<Label>(res)));
   }
   return labels;
 }
@@ -517,7 +519,7 @@ std::any MyCypherVisitor::visitOC_NodeLabels(CypherParser::OC_NodeLabelsContext 
   {
     auto res = child->accept(this);
     if(res.type() == typeid(Label))
-      labels.labels.push_back(std::move(std::any_cast<Label>(res)));
+      labels.labels.insert(std::move(std::any_cast<Label>(res)));
   }
   return labels;
 }
@@ -598,9 +600,35 @@ std::any MyCypherVisitor::visitOC_AndExpression(CypherParser::OC_AndExpressionCo
 
 std::any MyCypherVisitor::visitOC_NotExpression(CypherParser::OC_NotExpressionContext *context) {
   auto _ = scope("NotExpression");
-  if(context->children.size() != 1)
+  const bool negate = 1 == (context->NOT().size() % 2);
+  if(auto p = context->oC_ComparisonExpression())
   {
-    m_errors.push_back("OC_NotExpression expects a single child");
+    auto res = p->accept(this);
+    if(negate)
+    {
+      if(res.type() == typeid(ComparisonExpression))
+      {
+        auto res2 = std::move(std::any_cast<ComparisonExpression>(res));
+        res2.negate();
+        return res2;
+      }
+      else if(res.type() == typeid(NonArithmeticOperatorExpression))
+      {
+        auto res2 = std::move(std::any_cast<NonArithmeticOperatorExpression>(res));
+        res2.negate();
+        return res2;
+      }
+      else
+      {
+        m_errors.push_back("OC_NotExpression expects a ComparisonExpression");
+        return {};
+      }
+    }
+    return res;
+  }
+  else
+  {
+    m_errors.push_back("OC_NotExpression expects oC_ComparisonExpression");
     return {};
   }
   return context->children[0]->accept(this);
@@ -741,6 +769,11 @@ std::any MyCypherVisitor::visitOC_ListPredicateExpression(CypherParser::OC_ListP
       m_errors.push_back("OC_ListPredicateExpression NonArithmeticOperatorExpression cannot have a property.");
       return {};
     }
+    if(!naoExp.labels.empty())
+    {
+      m_errors.push_back("OC_ListPredicateExpression NonArithmeticOperatorExpression cannot have a label.");
+      return {};
+    }
     return std::get<Literal>(std::move(naoExp.atom.var));
   }
   m_errors.push_back("OC_ListPredicateExpression expects a oC_AddOrSubtractExpression");
@@ -826,7 +859,11 @@ std::any MyCypherVisitor::visitOC_NonArithmeticOperatorExpression(CypherParser::
   }
 
   if(auto * labels = context->oC_NodeLabels())
-    m_errors.push_back("OC_NonArithmeticOperatorExpression does not support Labels.");
+  {
+    auto res = labels->accept(this);
+    if(res.type() == typeid(Labels))
+      r.labels = std::move(std::any_cast<Labels>(res));
+  }
 
   return r;
 }
@@ -863,7 +900,11 @@ std::any MyCypherVisitor::visitOC_Atom(CypherParser::OC_AtomContext *context) {
   else if(res.type() == typeid(Literal))
     return Atom{std::move(std::any_cast<Literal>(res))};
   else if(res.type() == typeid(AggregateExpression))
-    return Atom{std::move(std::any_cast<AggregateExpression>(res))};
+    return Atom{std::move(std::any_cast<AggregateExpression>(res)).StealAsPtr()};
+  else if(res.type() == typeid(ComparisonExpression))
+    return Atom{std::move(std::any_cast<ComparisonExpression>(res)).StealAsPtr()};
+  else if(res.type() == typeid(StringListNullPredicateExpression))
+    return Atom{std::move(std::any_cast<StringListNullPredicateExpression>(res)).StealAsPtr()};
   else if(res.type() == typeid(NonArithmeticOperatorExpression))
     // To support the id(...) function, we rewrite the function call into a property access.
     return res;
@@ -939,7 +980,12 @@ std::any MyCypherVisitor::visitOC_FunctionInvocation(CypherParser::OC_FunctionIn
     m_errors.push_back("OC_FunctionInvocation expression must not have a property for now.");
     return {};
   }
-  
+  if(!naoExp.labels.empty())
+  {
+    m_errors.push_back("OC_FunctionInvocation expression must not have labels.");
+    return {};
+  }
+
   auto func = context->oC_FunctionName()->accept(this);
   if(func.type() != typeid(IdentityFunction))
   {
@@ -1082,6 +1128,11 @@ std::any MyCypherVisitor::visitOC_ListLiteral(CypherParser::OC_ListLiteralContex
         m_errors.push_back("OC_ListLiteral : mayPropertyName in NonArithmeticOperatorExpression is not supported");
         return {};
       }
+      if(!nao.labels.empty())
+      {
+        m_errors.push_back("OC_ListLiteral : labels in NonArithmeticOperatorExpression is not supported");
+        return {};
+      }
       append(std::move(*std::get<std::shared_ptr<Value>>(std::get<Literal>(std::move(nao.atom.var)).variant)), v);
     }
     else
@@ -1121,7 +1172,7 @@ std::any MyCypherVisitor::visitOC_Parameter(CypherParser::OC_ParameterContext *c
     if(paramName.type() == typeid(SymbolicName))
     {
       const auto & sn = std::any_cast<SymbolicName>(paramName);
-      auto it = m_queryParams.find(sn);
+      auto it = m_queryParams.find(ParameterName{sn});
       if(it != m_queryParams.end())
         // only list literals are supported for now.
         return Literal{it->second};

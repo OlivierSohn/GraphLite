@@ -443,7 +443,7 @@ GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
       const bool isRela = kind == std::string{"R"};
       if(!isNode && !isRela)
         throw std::logic_error("Expected E or R, got:" + kind);
-      const std::string namedType = std::get<StringPtr>(argv[0]).string.get();
+      const openCypher::Label namedType{ SymbolicName{ std::get<StringPtr>(argv[0]).string.get() }};
       if(isNode)
         This.m_indexedNodeTypes.add(typeIdx, namedType);
       else
@@ -452,7 +452,7 @@ GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
     }, this, &msg))
       throw std::logic_error(std::string{msg});
 
-    std::vector<std::string> typeNames;
+    std::vector<openCypher::Label> typeNames;
     for(const auto & [typeName, _] : m_indexedNodeTypes.getTypeToIndex())
       typeNames.push_back(typeName);
     for(const auto & [typeName, _] : m_indexedRelationshipTypes.getTypeToIndex())
@@ -460,7 +460,7 @@ GraphDB<ID>::GraphDB(const FuncOnSQLQuery& fOnSQLQuery,
     for(const auto & typeName : typeNames)
     {
       if(auto it = m_properties.find(typeName); it != m_properties.end())
-        throw std::logic_error("Invalid DB, type already exists:" + typeName);
+        throw std::logic_error("Invalid DB, type already exists:" + typeName.symbolicName.str);
 
       std::set<PropertySchema>& set = m_properties[typeName];
 
@@ -542,7 +542,9 @@ GraphDB<ID>::~GraphDB()
 template<typename ID>
 void GraphDB<ID>::addType(const std::string &typeName, bool isNode, const std::vector<PropertySchema> &properties)
 {
-  if(auto it = m_properties.find(typeName); it != m_properties.end())
+  const auto label = openCypher::Label{typeName};
+
+  if(auto it = m_properties.find(label); it != m_properties.end())
     throw std::logic_error("CREATE TABLE, type already exists.");
 
   {
@@ -590,10 +592,10 @@ void GraphDB<ID>::addType(const std::string &typeName, bool isNode, const std::v
     if(typeIdx == std::numeric_limits<size_t>::max())
       throw std::logic_error("no result for typeIdx.");
     if(isNode)
-      m_indexedNodeTypes.add(typeIdx, typeName);
+      m_indexedNodeTypes.add(typeIdx, label);
     else
-      m_indexedRelationshipTypes.add(typeIdx, typeName);
-    auto & set = m_properties[typeName];
+      m_indexedRelationshipTypes.add(typeIdx, label);
+    auto & set = m_properties[label];
     for(const auto & propertyName : properties)
       set.insert(propertyName);
     set.insert(m_idProperty);
@@ -602,17 +604,17 @@ void GraphDB<ID>::addType(const std::string &typeName, bool isNode, const std::v
 }
 
 template<typename ID>
-void GraphDB<ID>::validatePropertyValues(const std::string& typeName,
+void GraphDB<ID>::validatePropertyValues(const openCypher::Label& label,
                                      const std::vector<std::pair<PropertyKeyName, Value>>& propValues) const
 {
-  auto it = m_properties.find(typeName);
+  auto it = m_properties.find(label);
   if(it == m_properties.end())
     throw std::logic_error("The element type doesn't exist.");
   for(const auto & [name, value] : propValues)
   {
     auto it2 = it->second.find(name);
     if(it2 == it->second.end())
-      throw std::logic_error(std::string{"The property '"} + name.symbolicName.str + "' doesn't exist for the type '" + typeName + "'");
+      throw std::logic_error(std::string{"The property '"} + name.symbolicName.str + "' doesn't exist for the type '" + label.symbolicName.str + "'");
     const auto & propertySchema = *it2;
     verifyTypeConsistency(value, propertySchema);
   }
@@ -620,7 +622,7 @@ void GraphDB<ID>::validatePropertyValues(const std::string& typeName,
 }
 
 template<typename ID>
-bool GraphDB<ID>::findValidProperties(const std::string& typeName,
+bool GraphDB<ID>::findValidProperties(const openCypher::Label& typeName,
                                   const std::vector<PropertyKeyName>& propNames,
                                   std::vector<bool>& valid) const
 {
@@ -652,7 +654,9 @@ template<typename ID>
 ID GraphDB<ID>::addNode(const std::string& typeName,
                     const std::vector<std::pair<PropertyKeyName, Value>>& propValues)
 {
-  const auto typeIdx = m_indexedNodeTypes.getIfExists(typeName);
+  const auto label = openCypher::Label{SymbolicName{typeName}};
+
+  const auto typeIdx = m_indexedNodeTypes.getIfExists(label);
   if(!typeIdx.has_value())
     throw std::logic_error("unknown node type: " + typeName);
 
@@ -672,7 +676,7 @@ ID GraphDB<ID>::addNode(const std::string& typeName,
       },
                          [&, valuePtr=&value](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
         ps.bindVariable(var.next(), *valuePtr);
-        ps.bindVariable(var.next(), static_cast<int64_t>(*typeIdx));
+        ps.bindVariable(var.next(), static_cast<int64_t>(typeIdx->unsafeGet()));
       },
                          [](void *p_nodeId, int argc, Value *argv, char **column) {
         auto & nodeId = *static_cast<std::optional<ID>*>(p_nodeId);
@@ -692,7 +696,7 @@ ID GraphDB<ID>::addNode(const std::string& typeName,
     <<") RETURNING " << m_idProperty.name;
   },
                      [&](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
-    ps.bindVariable(var.next(), static_cast<int64_t>(*typeIdx));
+    ps.bindVariable(var.next(), static_cast<int64_t>(typeIdx->unsafeGet()));
   },
                      [](void *p_nodeId, int argc, Value *argv, char **column) {
     auto & nodeId = *static_cast<std::optional<ID>*>(p_nodeId);
@@ -705,7 +709,7 @@ idDone:;
   if(!nodeId.has_value())
     throw std::logic_error("no result for nodeId.");
   
-  addElement(typeName, *nodeId, propValues);
+  addElement(label, *nodeId, propValues);
   return std::move(*nodeId);
 }
 
@@ -717,7 +721,9 @@ ID GraphDB<ID>::addRelationship(const std::string& typeName,
                             const std::vector<std::pair<PropertyKeyName, Value>>& propValues,
                             bool verifyNodesExist)
 {
-  const auto typeIdx = m_indexedRelationshipTypes.getIfExists(typeName);
+  const auto label = openCypher::Label{SymbolicName{typeName}};
+
+  const auto typeIdx = m_indexedRelationshipTypes.getIfExists(label);
   if(!typeIdx.has_value())
     throw std::logic_error("unknown relationship type: " + typeName);
 
@@ -766,7 +772,7 @@ ID GraphDB<ID>::addRelationship(const std::string& typeName,
       },
                          [&, valuePtr=&value](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
         ps.bindVariable(var.next(), *valuePtr);
-        ps.bindVariable(var.next(), static_cast<int64_t>(*typeIdx));
+        ps.bindVariable(var.next(), static_cast<int64_t>(typeIdx->unsafeGet()));
         ps.bindVariable(var.next(), originEntity);
         ps.bindVariable(var.next(), destinationEntity);
       },
@@ -790,7 +796,7 @@ ID GraphDB<ID>::addRelationship(const std::string& typeName,
     <<") RETURNING " << m_idProperty.name;
   },
                      [&](SQLBoundVarIndex& var, SQLPreparedStatement& ps) {
-    ps.bindVariable(var.next(), static_cast<int64_t>(*typeIdx));
+    ps.bindVariable(var.next(), static_cast<int64_t>(typeIdx->unsafeGet()));
     ps.bindVariable(var.next(), originEntity);
     ps.bindVariable(var.next(), destinationEntity);
   },
@@ -804,12 +810,12 @@ ID GraphDB<ID>::addRelationship(const std::string& typeName,
 idDone:;
   if(!relId.has_value())
     throw std::logic_error("no result for relId.");
-  addElement(typeName, *relId, propValues);
+  addElement(label, *relId, propValues);
   return std::move(*relId);
 }
 
 template<typename ID>
-void GraphDB<ID>::addElement(const std::string& typeName,
+void GraphDB<ID>::addElement(const openCypher::Label& typeName,
                          const ID& id,
                          const std::vector<std::pair<PropertyKeyName, Value>>& propValues)
 {
@@ -887,45 +893,43 @@ void GraphDB<ID>::print()
   }
 }
 
+// The input labels are AND-ed labels constraints
+// The returned labels are OR-ed allowed labels
 template<typename ID>
-std::vector<std::string> GraphDB<ID>::computeLabels(const Element elem, const std::vector<std::string>& inputLabels) const
+std::set<openCypher::Label> GraphDB<ID>::computeAllowedLabels(const Element elem, const openCypher::Labels& labels) const
 {
-  std::vector<std::string> labels = inputLabels;
-  if(labels.empty())
+  if constexpr (c_labelsPerElement == CountLabelsPerElement::Multi)
+    static_assert(c_false<ID>, "The function signature will need to change to support this case");
+  else
   {
-    switch(elem)
+    if(labels.labels.size() >= 2)
     {
-      case Element::Node:
-        for(const auto&[key, _] : m_indexedNodeTypes.getTypeToIndex())
-          labels.push_back(key);
-        break;
-      case Element::Relationship:
-        for(const auto&[key, _] : m_indexedRelationshipTypes.getTypeToIndex())
-          labels.push_back(key);
-        break;
+      // we are in CountLabelsPerElement::One mode so elements cannot have multiple labels.
+      return {};
+    }
+    else
+    {
+      if(labels.empty())
+      {
+        std::set<openCypher::Label> labels;
+        switch(elem)
+        {
+          case Element::Node:
+            for(const auto&[key, _] : m_indexedNodeTypes.getTypeToIndex())
+              labels.insert(key);
+            break;
+          case Element::Relationship:
+            for(const auto&[key, _] : m_indexedRelationshipTypes.getTypeToIndex())
+              labels.insert(key);
+            break;
+        }
+        return labels;
+      }
+      else
+        // contains a single label.
+        return labels.labels;
     }
   }
-  return labels;
-}
-
-template<typename ID>
-std::vector<size_t> GraphDB<ID>::labelsToTypeIndices(const Element elem, const std::vector<std::string>& inputLabels) const
-{
-  std::vector<size_t> indices;
-  switch(elem)
-  {
-    case Element::Node:
-      for(const auto & label : inputLabels)
-        if(auto val = m_indexedNodeTypes.getIfExists(label))
-          indices.push_back(*val);
-      break;
-    case Element::Relationship:
-      for(const auto & label : inputLabels)
-        if(auto val = m_indexedRelationshipTypes.getIfExists(label))
-          indices.push_back(*val);
-      break;
-  }
-  return indices;
 }
 
 // In cypher when a property is missing, it is handled the same as if its value was null,
@@ -933,12 +937,15 @@ std::vector<size_t> GraphDB<ID>::labelsToTypeIndices(const Element elem, const s
 // So we replace non-existing properties by NULL.
 // We also simplify (using a post order traversal) the SQL expression tree,
 // and if the tree results in a single "NULL" node, we return false.
+
+template<typename ID>
 [[nodiscard]]
-bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
-                           const std::set<PropertySchema>& sqlFields,
-                           const std::map<openCypher::Variable, std::map<openCypher::PropertyKeyName, std::string>>& propertyMappingCypherToSQL,
-                           std::string& sqlFilter,
-                           sql::QueryVars & vars)
+bool
+GraphDB<ID>::toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cypherExprs,
+                                   const std::set<PropertySchema>& sqlFields,
+                                   const std::map<openCypher::Variable, VarQueryInfo>& varsQueryInfo,
+                                   std::string& sqlFilter,
+                                   sql::QueryVars & vars) const
 {
   sqlFilter.clear();
   if(cypherExprs.empty())
@@ -946,19 +953,19 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
   
   std::unique_ptr<sql::Expression> sqlExpr;
   if(cypherExprs.size() == 1)
-    sqlExpr = cypherExprs[0]->toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL);
+    sqlExpr = cypherExprs[0]->toSQLExpressionTree(sqlFields, varsQueryInfo);
   else
   {
     std::vector<std::unique_ptr<sql::Expression>> sqlExprs;
     sqlExprs.reserve(cypherExprs.size());
     for(const auto & cypherExpr : cypherExprs)
-      sqlExprs.push_back(cypherExpr->toSQLExpressionTree(sqlFields, propertyMappingCypherToSQL));
+      sqlExprs.push_back(cypherExpr->toSQLExpressionTree(sqlFields, varsQueryInfo));
     sqlExpr = std::make_unique<sql::AggregateExpression>(sql::Aggregator::AND, std::move(sqlExprs));
   }
 
   // if the expression would be evaluated as FALSE in the WHERE clause, we return false.
   // if the expression would be evaluated as TRUE in the WHERE clause, we return true and make the clause empty.
-  if(auto eval = sqlExpr->tryEvaluate())
+  if(auto eval = sqlExpr->tryEvaluate(c_labelsPerElement))
   {
     switch(*eval)
     {
@@ -977,44 +984,53 @@ bool toEquivalentSQLFilter(const std::vector<const openCypher::Expression*>& cyp
 
 
 size_t countPropertiesNotEqual(const openCypher::PropertyKeyName& property,
-                               const openCypher::VarsAndProperties& varsAndProperties)
+                               const openCypher::VarsUsages& varsUsages)
 {
   size_t count{};
-  for(const auto & [_, properties]: varsAndProperties)
-    count += properties.size() - properties.count(property);
+  for(const auto & [_, usage]: varsUsages)
+    count += usage.properties.size() - usage.properties.count(property);
   return count;
 }
 
 // An empty |labelsStr| means we want all types.
 //
 // When no value is returned it means all types are possible.
+// When an empty set is returned it means no type is possible
 template<typename ID>
-std::optional<std::set<size_t>>
+std::optional<std::set<sql::ElementTypeIndex>>
 GraphDB<ID>::computeTypeFilter(const Element e,
-                           const std::vector<std::string>& labelsStr)
+                               const openCypher::Labels& labels)
 {
-  if(labelsStr.empty())
+  if(labels.empty())
     return std::nullopt;
-  const auto & allTypes = (e == Element::Node) ? m_indexedNodeTypes : m_indexedRelationshipTypes;
-  const auto countPossibleTypes = allTypes.getTypeToIndex().size();
-  std::set<size_t> types;
-  for(const auto & labelStr : labelsStr)
-    if(auto i = allTypes.getIfExists(labelStr))
-      types.insert(*i);
-  if(types.size() == countPossibleTypes)
-    // all types are posible.
-    // the reason we return no value instead of all possible values
-    // is because it will possibly optimize some queries.
-    return std::nullopt;
-  return types;
+  if constexpr (c_labelsPerElement == CountLabelsPerElement::One)
+  {
+    if(labels.labels.size() >= 2)
+      // no label is possible because in our case a node or relationship has a single label.
+      return std::set<sql::ElementTypeIndex>{};
+    const auto & allTypes = (e == Element::Node) ? m_indexedNodeTypes : m_indexedRelationshipTypes;
+    const auto countPossibleTypes = allTypes.getTypeToIndex().size();
+    std::set<sql::ElementTypeIndex> types;
+    for(const auto & label : labels.labels)
+      if(auto i = allTypes.getIfExists(label))
+        types.insert(*i);
+    if(types.size() == countPossibleTypes)
+      // all types are posible.
+      // the reason we return no value instead of all possible values
+      // is because it will possibly optimize some queries.
+      return std::nullopt;
+    return types;
+  }
+  else if constexpr (c_labelsPerElement == CountLabelsPerElement::Multi)
+    static_assert(c_false<ID>, "The function signature will need to change to support this case");
 }
 
 
 template<typename ID>
 void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDirections,
-                          const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesI,
+                          const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
                           const std::vector<PathPatternElement>& pathPattern,
-                          const ExpressionsByVarAndProperties& allFilters,
+                          const ExpressionsByVarsUsages& allFilters,
                           const std::optional<Limit>& limit,
                           FuncResults& f)
 {
@@ -1030,17 +1046,15 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   
   // These constraints contain non-id properties so we apply them while querying the non-system relationship/entity tables.
   std::map<Variable, VariablePostFilters> postFilters;
-  
-  analyzeFilters(allFilters, idFilters, postFilters);
-  
+
   std::map<Variable, VariableInfo> varInfo;
 
-  for(const auto & [var, returnedProperties] : variablesI)
-  {
-    VariableInfo& info = varInfo[var];
-    info.needsTypeInfo = varRequiresTypeInfo(var, returnedProperties, postFilters);
-    info.lookupProperties = postFilters.count(var) || !returnedProperties.empty();
-  }
+  analyzeFilters(allFilters, variablesInfo, idFilters, postFilters, varInfo);
+
+  // We apply the LIMIT clause in the system relationships table query when
+  // we know that all candidate rows found in this query will be returned.
+  const bool applyHardLimitInSystemRelationshipsQuery = postFilters.empty();
+  
 
   auto pathPatternIndexToElement = [](size_t i)
   {
@@ -1050,25 +1064,29 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   std::map<Variable, Element> varToElement;
 
   // parallel to pathPattern
-  std::vector<std::optional<std::set<size_t>>> nodesRelsTypesFilters;
+  std::vector<std::optional<std::set<sql::ElementTypeIndex>>> nodesRelsTypesFilters;
   nodesRelsTypesFilters.reserve(pathPatternSize);
   {
     size_t i{};
     for(const auto & pattern : pathPattern)
     {
       const Element element = pathPatternIndexToElement(i);
-      nodesRelsTypesFilters.push_back(computeTypeFilter(element, pattern.labels));
       if(pattern.var.has_value())
         varToElement[*pattern.var] = element;
+      const auto filter = computeTypeFilter(element, pattern.labels);
+      if(filter.has_value() && filter->empty())
+        // No label is allowed for this variable, so the query has no result.
+        return;
+      nodesRelsTypesFilters.push_back(filter);
       ++i;
     }
   }
 
   std::map<Variable, size_t> varToVarIdx;
-  for(const auto & [var, _] : variablesI)
+  for(const auto & [var, _] : variablesInfo)
     varToVarIdx[var] = varToVarIdx.size();
 
-  const size_t countDistinctVariables{variablesI.size()};
+  const size_t countDistinctVariables{variablesInfo.size()};
 
   std::vector<Variable> varIdxToVar(countDistinctVariables);
   for(const auto & [var, i] : varToVarIdx)
@@ -1111,7 +1129,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
       }
       s << "SELECT ";
       unsigned selectIndex{};
-      auto pushSelect = [&](const std::string& columnName)
+      auto pushSelect = [&](const sql::QueryColumnName& columnName)
       {
         if(selectIndex)
           s << ", ";
@@ -1123,8 +1141,8 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
       std::vector<std::string> relationshipSelfJoins;
       std::vector<std::string> constraints;
 
-      std::map<Variable, std::string> variableToIDField;
-      std::map<Variable, std::string> variableToTypeField;
+      std::map<Variable, sql::QueryColumnName> variableToIDQueryColumn;
+      std::map<Variable, sql::QueryColumnName> variableToTypeQueryColumn;
 
       std::optional<std::string> prevToField;
       std::set<std::string> prevRelationshipIDFields;
@@ -1134,7 +1152,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
       {
         // A relationship can only be traversed once in a given match for a graph pattern.
         // The same restriction doesn’t hold for nodes, which may be re-traversed any number of times in a match.
-        const bool varAlreadySeen = pathPattern.var.has_value() && variableToIDField.count(*pathPattern.var);
+        const bool varAlreadySeen = pathPattern.var.has_value() && variableToIDQueryColumn.count(*pathPattern.var);
 
         // assuming all traveral directions are Forward, the path pattern looks like this:
         // (v0)-[v1]->(v2)-[v3]->(v4)-[v5]->(v6) ...
@@ -1165,7 +1183,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
         }
 
         std::string columnNameForID(relationshipTableJoinAlias);
-        std::optional<std::string> columnNameForType;
+        std::optional<sql::QueryColumnName> columnNameForType;
         if(elem == Element::Node)
         {
           // For the TraversalDirection::Any case, we use a view on relationships table that duplicates
@@ -1175,7 +1193,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
           prevToField = columnNameForID;
 
           if(varAlreadySeen)
-            constraints.push_back("( " + columnNameForID + " = " + variableToIDField[*pathPattern.var] + " )" );
+            constraints.push_back("( " + columnNameForID + " = " + variableToIDQueryColumn[*pathPattern.var].name + " )" );
 
           const bool needsTypeField =
           // We have a filter on type
@@ -1186,20 +1204,20 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
           if(needsTypeField)
           {
             if(pathPattern.var.has_value())
-              if(auto it = variableToTypeField.find(*pathPattern.var); it != variableToTypeField.end())
+              if(auto it = variableToTypeQueryColumn.find(*pathPattern.var); it != variableToTypeQueryColumn.end())
                 columnNameForType = it->second;
             if(!columnNameForType.has_value())
             {
               const std::string nodeTableJoinAlias{"N" + std::to_string(nodeJoinIndex)};
               nodeJoins.push_back(" INNER JOIN nodes " + nodeTableJoinAlias + " ON " + nodeTableJoinAlias + ".SYS__ID = " + columnNameForID);
-              columnNameForType = nodeTableJoinAlias + ".NodeType";
+              columnNameForType = sql::QueryColumnName{nodeTableJoinAlias + ".NodeType"};
             }
           }
         }
         else
         {
           columnNameForID += ".SYS__ID";
-          columnNameForType = relationshipTableJoinAlias + ".RelationshipType";
+          columnNameForType = sql::QueryColumnName{relationshipTableJoinAlias + ".RelationshipType"};
           if(varAlreadySeen)
             // Because openCypher only allows paths to traverse a relationship once (see comment on relationship uniqueness above),
             // repeating a variable-length relationship in the same graph pattern will yield no results.
@@ -1230,7 +1248,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
           const size_t i = varToVarIdx[*pathPattern.var];
           const auto & info = varInfo[*pathPattern.var];
           if(info.lookupProperties)
-            queryInfo.indexIDs[i] = pushSelect(columnNameForID);
+            queryInfo.indexIDs[i] = pushSelect(sql::QueryColumnName{columnNameForID});
           if(info.needsTypeInfo)
           {
             if(!columnNameForType.has_value())
@@ -1238,9 +1256,9 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
             queryInfo.indexTypes[i] = pushSelect(*columnNameForType);
           }
 
-          variableToIDField.emplace(*pathPattern.var, columnNameForID);
+          variableToIDQueryColumn.emplace(*pathPattern.var, sql::QueryColumnName{columnNameForID});
           if(columnNameForType.has_value())
-            variableToTypeField[*pathPattern.var] = *columnNameForType;
+            variableToTypeQueryColumn[*pathPattern.var] = *columnNameForType;
         }
 
         if(const auto & typeFilter = nodesRelsTypesFilters[patternIndex])
@@ -1248,7 +1266,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
           if(!columnNameForType.has_value())
             throw std::logic_error("[Unexpected]");
           // Note: for MATCH (a:Type1)-[]->(a:Type2) since 'a' is used in both node patterns,
-          //   it means a must be Type1 AND Type2.
+          //   it means 'a' must be Type1 AND Type2.
           // In our case (single label per entity) no row will be ever returned.
           constraints.push_back(mkFilterTypesConstraint(*typeFilter, *columnNameForType));
         }
@@ -1258,12 +1276,20 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
 
       if(!idFilters.empty())
       {
-        std::map<Variable, std::map<PropertyKeyName, std::string>> propertyMappingCypherToSQL;
-        for(const auto & [var, idField] : variableToIDField)
-          propertyMappingCypherToSQL[var][m_idProperty.name] = idField;
+        std::map<Variable, VarQueryInfo> varQueryInfo;
+        for(const auto & [var, qc] : variableToIDQueryColumn)
+          insert(varToElement[var], var, varQueryInfo).cypherPropertyToSQLQueryColumnName[m_idProperty.name] = qc;
+        for(const auto & [var, qc] : variableToTypeQueryColumn)
+          insert(varToElement[var], var, varQueryInfo).typeIndexSQLQueryColumn = qc;
+        // we don't assume any particular element label.
         std::string sqlFilter;
-        if(!toEquivalentSQLFilter(idFilters, {m_idProperty}, propertyMappingCypherToSQL, sqlFilter, sqlVars))
-          throw std::logic_error("[Unexpected] Expressions in idFilters are all equi-property with property m_idProperty");
+        if(!toEquivalentSQLFilter(idFilters,
+                                  {m_idProperty},
+                                  varQueryInfo,
+                                  sqlFilter,
+                                  sqlVars))
+          // can only happen if there is some type constraints evaluate to false
+          return;
         if(!sqlFilter.empty())
           constraints.push_back("( " + sqlFilter + " )");
       }
@@ -1302,6 +1328,9 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
         addWhereTerm();
         s << constraint;
       }
+      
+      if(applyHardLimitInSystemRelationshipsQuery && limit.has_value())
+        s << " LIMIT " << limit->maxCountRows;
     }
 
     const char*msg{};
@@ -1342,7 +1371,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
     const auto endElementType = getEndElementType();
     // indexed by element type
     std::vector<std::unordered_set<ID> /* element ids*/> elementsByType;
-    for(const auto & [var, returnedProperties] : variablesI)
+    for(const auto & [var, returnedProperties] : variablesInfo)
     {
       const size_t i = varToVarIdx[var];
       auto & props = strPropertiesByVar[i];
@@ -1385,7 +1414,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   std::vector<bool> varOnlyReturnsId(countDistinctVariables);
   std::vector<bool> lookupProperties(countDistinctVariables);
 
-  for(const auto & [var, returnedProperties] : variablesI)
+  for(const auto & [var, returnedProperties] : variablesInfo)
   {
     const size_t i = varToVarIdx[var];
     vecReturnClauses[i] = &returnedProperties;
@@ -1464,12 +1493,17 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   }
 }
 
+template<typename ID>
+VarQueryInfo& GraphDB<ID>::insert(const Element elem, const Variable & var, std::map<Variable, VarQueryInfo>& varQueryInfo) const
+{
+  return varQueryInfo.try_emplace(var, elem == Element::Node ? m_indexedNodeTypes : m_indexedRelationshipTypes).first->second;
+}
 
 template<typename ID>
 void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
                                                  const Element elem,
                                                  const std::vector<ReturnClauseTerm>& returnClauseTerms,
-                                                 const std::vector<std::string>& inputLabels,
+                                                 const openCypher::Labels& labels,
                                                  const std::vector<const Expression*>* filter,
                                                  const std::optional<Limit>& limit,
                                                  FuncResults& f)
@@ -1509,16 +1543,20 @@ void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
   std::vector<bool> validProperty;
   std::ostringstream s;
   bool firstOutter = true;
-  for(const auto & label : computeLabels(elem, inputLabels))
+  for(const auto & label : computeAllowedLabels(elem, labels))
   {
     if(!findValidProperties(label, propertyNames, validProperty))
       // label does not exist.
       continue;
     std::string sqlFilter{};
     if(filter && !filter->empty())
-      if(!toEquivalentSQLFilter(*filter, m_properties[label], {}, sqlFilter, sqlVars))
+    {
+      std::map<Variable, VarQueryInfo> varQueryInfo;
+      insert(elem, var, varQueryInfo).variableLabels = {label};
+      if(!toEquivalentSQLFilter(*filter, m_properties[label], varQueryInfo, sqlFilter, sqlVars))
         // These items are excluded by the filter.
         continue;
+    }
     // in forEachNodeAndRelatedRelationship we have an optimization where
     // if all properties are invalid and we don't filter,
     // then we don't query and return results directly.
@@ -1591,47 +1629,132 @@ auto GraphDB<ID>::computeResultOrder(const std::vector<const std::vector<ReturnC
   return resultOrder;
 }
 
+// In |postFilters|, the Variable key is the variable for which a property is used in the filters.
+// But there may be _other_ variables used in the expressions.
+// For example:
+//   MATCH (a)-[r]->(b) WHERE r:Rel2 OR a.age > 2.5 return id(r)
+// There is a single postFilter "r:Rel2 OR a.age > 2.5", the Variable key is 'a' because the
+// property a.age is used, however the variable 'r' is used also.
 template<typename ID>
-void GraphDB<ID>::analyzeFilters(const ExpressionsByVarAndProperties& allFilters,
-                             std::vector<const Expression*>& idFilters,
-                             std::map<Variable, VariablePostFilters>& postFilters) const
+void GraphDB<ID>::analyzeFilters(const ExpressionsByVarsUsages& allFilters,
+                                 const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
+                                 std::vector<const Expression*>& idAndLabelFilters,
+                                 std::map<Variable, VariablePostFilters>& postFilters,
+                                 std::map<Variable, VariableInfo>& varInfo) const
 {
-  for(const auto & [varsAndProperties, expressions] : allFilters)
+  // There are several categories of type constraints:
+  //   # Type constraints that can be applied in the system relationships query:
+  //     - single- variable type constraints
+  //         "a:Label1"
+  //         "a:Label1 OR a:Label2"
+  //     - multi-variables type constraints
+  //         "a:Label1 OR b:Label2"
+  //         "(a:Label1 AND b:Label2) OR (c:Label1 AND b:Label1)"
+  //   # Type constraints that can be applied in the typed property tables query
+  //     (Each type term in these constraints will be replaced by TRUE / FALSE when used in a given typed table query)
+  //     - (single- and multi-)variable type constraints that are mixed with single-variable property constraints:
+  //       "a:Label1 OR a.weight = 0"
+  //       "a:Label1 OR a:Label2 OR a.weight = 0"
+  //   # Type constraints that cannot be applied yet (in the future they could be applied in the system relationships query
+  //                                                  if the corresponding properties are inline json properties):
+  //     - (single- and multi-)variable type constraints that are mixed with multi-variable property constraints:
+  //       "a:Label1 OR (a.weight = 0 AND c.weight = 3)"
+  //       "a:Label1 OR a:Label2 OR (a.weight = 0 AND c.weight = 3)"
+
+  for(const auto & [varsUsages, expressions] : allFilters)
   {
-    if(varsAndProperties.size() >= 2)
+    if(varsUsages.empty())
+      throw std::logic_error("[Unexpected] A filter expression has no variable.");
+
+    const auto countDistinctVariablesUsingSomeProperties = [varsAndPropertiesPtr = &varsUsages]()
     {
-      // 'expressions' use 2 or more variables
+      size_t count{};
+      for(const auto & [var, usage] : *varsAndPropertiesPtr)
+      {
+        if(!usage.properties.empty())
+        {
+          // this variable uses some properties (and maybe has some associated label constraint(s))
+          ++count;
+        }
+        else
+        {
+          // this variable uses no property (it has some associated label constraint(s))
+        }
+      }
+      return count;
+    }();
+
+    if(countDistinctVariablesUsingSomeProperties >= 2)
+    {
+      // 'expressions' has 2 or more variables that use properties (and potentially other variables that don't use properties).
       
-      if(countPropertiesNotEqual(m_idProperty.name, varsAndProperties) > 0)
+      if(countPropertiesNotEqual(m_idProperty.name, varsUsages) > 0)
         // At least one non-id property is used.
-        // We could support this in the future by evaluating these expressions at the end
-        // of this function when returning the results.
+        // We could support this in the future by evaluating these expressions manually before returning the results.
         throw std::logic_error("[Not supported] A non-equi-var expression is using non-id properties.");
       
       // only id properties are used so we will use these expressions to filter the system relationships table.
-      idFilters.insert(idFilters.end(), expressions.begin(), expressions.end());
+      idAndLabelFilters.insert(idAndLabelFilters.end(), expressions.begin(), expressions.end());
     }
-    else if(varsAndProperties.size() == 1)
+    else if(countDistinctVariablesUsingSomeProperties == 1)
     {
-      // 'expressions' uses a single variable
-      if(countPropertiesNotEqual(m_idProperty.name, varsAndProperties) > 0)
+      // 'expressions' has a single variable that uses properties (and potentially other variables that don't use properties).
+      if(countPropertiesNotEqual(m_idProperty.name, varsUsages) > 0)
       {
         // At least one non-id property is used.
-        VariablePostFilters & postFiltersForVar = postFilters[varsAndProperties.begin()->first];
-        for(const PropertyKeyName & property : varsAndProperties.begin()->second)
-          postFiltersForVar.properties.insert(property);
-        postFiltersForVar.filters.insert(postFiltersForVar.filters.end(), expressions.begin(), expressions.end());
+        size_t countFound{};
+        for(const auto & [var, usage] : varsUsages)
+        {
+          if(!usage.properties.empty())
+          {
+            ++countFound;
+            
+            VariablePostFilters & postFiltersForVar = postFilters[var];
+            for(const PropertyKeyName & property : usage.properties)
+              postFiltersForVar.properties.insert(property);
+            postFiltersForVar.filters.insert(postFiltersForVar.filters.end(), expressions.begin(), expressions.end());
+          }
+          else
+          {
+            if(!usage.usedInLabelConstraints)
+              throw std::logic_error("[Unexpected] usage contains no property and no label constraint.");
+            
+            // We could support this in the future by evaluating these expressions manually before returning the results.
+            throw std::logic_error("[Not supported] A non-equi-var expression (with label constraints) is using non-id properties.");
+          }
+        }
+        if(countFound != 1)
+          throw std::logic_error("[Unexpected] countDistinctVariablesUsingSomeProperties == 1 so countFound should be 1 but it is " + std::to_string(countFound));
       }
-      else if(varsAndProperties.begin()->second.count(m_idProperty.name))
+      else if(varsUsages.begin()->second.properties.count(m_idProperty.name))
       {
         // only id properties are used
-        idFilters.insert(idFilters.end(), expressions.begin(), expressions.end());
+        idAndLabelFilters.insert(idAndLabelFilters.end(), expressions.begin(), expressions.end());
       }
       else
         throw std::logic_error("[Unexpected] A filter expression has no property.");
     }
     else
-      throw std::logic_error("[Unexpected] A filter expression has no variable.");
+    {
+      if(countDistinctVariablesUsingSomeProperties != 0)
+        throw std::logic_error("[Unexpected] countDistinctVariablesUsingSomeProperties should be 0");
+
+      // 'expressions' only has variables that don't use properties (i.e only type constraints)
+      // so we will use these expressions to filter the system relationships table.
+      idAndLabelFilters.insert(idAndLabelFilters.end(), expressions.begin(), expressions.end());
+    }
+
+    for(const auto & [var, usages] : varsUsages)
+      if(usages.usedInLabelConstraints)
+        varInfo[var].needsTypeInfo = true;
+  }
+
+  for(const auto & [var, returnedProperties] : variablesInfo)
+  {
+    VariableInfo& info = varInfo[var];
+    if(!info.needsTypeInfo)
+      info.needsTypeInfo = varRequiresTypeInfo(var, returnedProperties, postFilters);
+    info.lookupProperties = postFilters.count(var) || !returnedProperties.empty();
   }
 }
 
@@ -1673,10 +1796,10 @@ bool GraphDB<ID>::varRequiresTypeInfo(const Variable& var,
 }
 
 template<typename ID>
-std::string GraphDB<ID>::mkFilterTypesConstraint(const std::set<size_t>& typesFilter, std::string const& typeColumn)
+std::string GraphDB<ID>::mkFilterTypesConstraint(const std::set<sql::ElementTypeIndex>& typesFilter, sql::QueryColumnName const& typeColumn)
 {
   std::ostringstream s;
-  s << " " << typeColumn << " IN (";
+  s << " " << typeColumn.name << " IN (";
   bool first = true;
   for(const auto typeIdx : typesFilter)
   {
@@ -1684,7 +1807,7 @@ std::string GraphDB<ID>::mkFilterTypesConstraint(const std::set<size_t>& typesFi
       first = false;
     else
       s << ",";
-    s << typeIdx;
+    s << typeIdx.unsafeGet();
   }
   s << ")";
   return s.str();
@@ -1736,7 +1859,9 @@ void GraphDB<ID>::gatherPropertyValues(const Variable& var,
       auto it = m_properties.find(label);
       if(it == m_properties.end())
         throw std::logic_error("[Unexpected] Label not found in properties.");
-      if(!toEquivalentSQLFilter(postFilterForVar->filters, it->second, {}, sqlFilter, sqlVars))
+      std::map<Variable, VarQueryInfo> varQueryInfo;
+      insert(elem, var, varQueryInfo).variableLabels = {label};
+      if(!toEquivalentSQLFilter(postFilterForVar->filters, it->second, varQueryInfo, sqlFilter, sqlVars))
         // These items are excluded by the filter.
         continue;
     }
@@ -1843,8 +1968,10 @@ size_t GraphDB<ID>::getEndElementType() const
   if(!max1.has_value() && !max2.has_value())
     return 0ull;
   size_t end = 0;
-  end = std::max(end, max1.value_or(std::numeric_limits<size_t>::lowest()));
-  end = std::max(end, max2.value_or(std::numeric_limits<size_t>::lowest()));
+  if(max1.has_value())
+    end = std::max(end, max1->unsafeGet());
+  if(max2.has_value())
+    end = std::max(end, max2->unsafeGet());
   return end + 1ull;
 }
 
