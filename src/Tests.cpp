@@ -1295,7 +1295,17 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(Value(123456), handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
+
+  handler.run("MATCH (b)<-[r]-(a) WHERE (NOT NOT (r.since IN [ 123456, 3764573645 ])) AND a.age IN [ 105, 3746573 ] return a.age, b.age, r.since");
   
+  EXPECT_EQ(1, handler.countRows());
+  EXPECT_EQ(3, handler.countColumns());
+  EXPECT_EQ(Value(105), handler.rows()[0][0]);
+  EXPECT_EQ(Value(110), handler.rows()[0][1]);
+  EXPECT_EQ(Value(123456), handler.rows()[0][2]);
+  EXPECT_EQ(4, handler.countSQLQueries());
+  // 4 because we need different queries on node and dualNode.
+
 
   // not supported yet: "A non-equi-var expression is using non-id properties"
   EXPECT_THROW(handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 OR a.age < 107 return a.age, b.age, r.since"), std::logic_error);
