@@ -83,6 +83,27 @@ enum class Comparison
   LE  // <=
 };
 
+inline Comparison negateComparison(Comparison c)
+{
+  switch(c)
+  {
+    case Comparison::EQ:
+      return Comparison::NE;
+    case Comparison::NE:
+      return Comparison::EQ;
+
+    case Comparison::GT:
+      return Comparison::LE;
+    case Comparison::LE:
+      return Comparison::GT;
+
+    case Comparison::GE:
+      return Comparison::LT;
+    case Comparison::LT:
+      return Comparison::GE;
+  }
+}
+
 // Cypher and SQL comparison strings are the same.
 inline std::string toStr(Comparison cmp)
 {
@@ -104,6 +125,18 @@ enum class Evaluation
   Unknown, // for null
   True
 };
+
+inline Evaluation negated(Evaluation e)
+{
+  switch(e)
+  {
+    case Evaluation::False:
+      return Evaluation::True;
+    case Evaluation::True:
+      return Evaluation::False;
+  }
+  return Evaluation::Unknown;
+}
 
 struct Expression
 {
@@ -196,6 +229,31 @@ struct False : public Expression
   void toString(std::ostream& os, QueryVars& vars) const override { os << "FALSE"; }
 };
 
+// Represents a negation.
+struct Not : public Expression
+{
+  Not(std::unique_ptr<Expression> && expr)
+  : m_expr(std::move(expr))
+  {}
+
+  std::optional<Evaluation> tryEvaluate(const CountLabelsPerElement countLabelsPerElement) const override
+  {
+    if(std::optional<Evaluation> eval = m_expr->tryEvaluate(countLabelsPerElement))
+      return negated(*eval);
+    return std::nullopt;
+  }
+
+  void toString(std::ostream& os, QueryVars& vars) const override
+  {
+    os << " NOT ( ";
+    m_expr->toString(os, vars);
+    os << " ) ";
+  }
+
+private:
+  std::unique_ptr<Expression> m_expr;
+};
+
 struct ElementLabelsConstraints : public Expression
 {
   // |typeIndexQueryColumn| is the name of the sql query column that will hold the type index information.
@@ -211,7 +269,7 @@ struct ElementLabelsConstraints : public Expression
     if(countLabelsPerElement == CountLabelsPerElement::One)
       if(m_typeConstraintsANDed.size() >= 2)
         return Evaluation::False;
-    return Evaluation::Unknown;
+    return std::nullopt;
   }
   
   void toString(std::ostream& os, QueryVars& vars) const override
@@ -272,11 +330,13 @@ struct ComparisonExpression : public Expression {
 
   void toString(std::ostream& os, QueryVars& vars) const override
   {
+    os << " ( ";
     m_left->toString(os, vars);
-    os << " ";
+    os << " ) ";
     os << toStr(m_comp);
-    os << " ";
+    os << " ( ";
     m_right->toString(os, vars);
+    os << " ) ";
   }
 
 private:

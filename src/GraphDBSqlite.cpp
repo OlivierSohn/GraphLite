@@ -1272,7 +1272,8 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
                                   varQueryInfo,
                                   sqlFilter,
                                   sqlVars))
-          throw std::logic_error("[Unexpected] Expressions in idFilters are all equi-property with property m_idProperty");
+          // can only happen if there is some type constraints evaluate to false
+          return;
         if(!sqlFilter.empty())
           constraints.push_back("( " + sqlFilter + " )");
       }
@@ -1612,6 +1613,12 @@ auto GraphDB<ID>::computeResultOrder(const std::vector<const std::vector<ReturnC
   return resultOrder;
 }
 
+// In |postFilters|, the Variable key is the variable for which a property is used in the filters.
+// But there may be _other_ variables used in the expressions.
+// For example:
+//   MATCH (a)-[r]->(b) WHERE r:Rel2 OR a.age > 2.5 return id(r)
+// There is a single postFilter "r:Rel2 OR a.age > 2.5", the Variable key is 'a' because the
+// property a.age is used, however the variable 'r' is used also.
 template<typename ID>
 void GraphDB<ID>::analyzeFilters(const ExpressionsByVarsUsages& allFilters,
                                  const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
@@ -1667,8 +1674,7 @@ void GraphDB<ID>::analyzeFilters(const ExpressionsByVarsUsages& allFilters,
       
       if(countPropertiesNotEqual(m_idProperty.name, varsUsages) > 0)
         // At least one non-id property is used.
-        // We could support this in the future by evaluating these expressions at the end
-        // of this function when returning the results.
+        // We could support this in the future by evaluating these expressions manually before returning the results.
         throw std::logic_error("[Not supported] A non-equi-var expression is using non-id properties.");
       
       // only id properties are used so we will use these expressions to filter the system relationships table.
@@ -1691,6 +1697,14 @@ void GraphDB<ID>::analyzeFilters(const ExpressionsByVarsUsages& allFilters,
             for(const PropertyKeyName & property : usage.properties)
               postFiltersForVar.properties.insert(property);
             postFiltersForVar.filters.insert(postFiltersForVar.filters.end(), expressions.begin(), expressions.end());
+          }
+          else
+          {
+            if(!usage.usedInLabelConstraints)
+              throw std::logic_error("[Unexpected] usage contains no property and no label constraint.");
+            
+            // We could support this in the future by evaluating these expressions manually before returning the results.
+            throw std::logic_error("[Not supported] A non-equi-var expression (with label constraints) is using non-id properties.");
           }
         }
         if(countFound != 1)

@@ -1,7 +1,7 @@
 #include "SQLPreparedStatement.h"
 #include "sqlext/carray.h"
 
-#define DEBUG_BINDINGS 1
+#define DEBUG_BINDINGS 0
 
 int SQLPreparedStatement::prepare(sqlite3* db, const std::string& queryStr)
 {

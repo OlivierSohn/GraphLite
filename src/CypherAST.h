@@ -575,9 +575,10 @@ struct NonArithmeticOperatorExpression : public Expression
 {
   static constexpr const char * c_name {"NonArithmeticOperatorExpression"};
   
-  Atom atom;
-  std::optional<PropertyKeyName> mayPropertyName;
-  Labels labels;
+  void negate()
+  {
+    negated = !negated;
+  }
 
   std::unique_ptr<Expression> StealAsPtr() override
   {
@@ -590,7 +591,7 @@ struct NonArithmeticOperatorExpression : public Expression
   {
     if(mayPropertyName.has_value())
       throw std::logic_error("asMaximalANDAggregation not implemented for NonArithmeticOperatorExpression that has a property name");
-
+    
     std::visit([&](auto && arg) {
       using T = std::decay_t<decltype(arg)>;
       if constexpr (std::is_same_v<T, Variable>)
@@ -602,12 +603,16 @@ struct NonArithmeticOperatorExpression : public Expression
       else if constexpr (std::is_same_v<T, Literal>)
         throw std::logic_error("asMaximalANDAggregation didn't expect a literal.");
       else if constexpr (std::is_same_v<T, AggregateExpression>)
+      {
+        if(negated)
+          throw std::logic_error("asMaximalANDAggregation todo support negation for AggregateExpression.");
         arg.asMaximalANDAggregation(exprs);
+      }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     }, atom.var);
   }
-
+  
   VarsUsages varsUsages() const override
   {
     return std::visit([&](auto && arg) -> VarsUsages {
@@ -634,7 +639,7 @@ struct NonArithmeticOperatorExpression : public Expression
         static_assert(c_false<T>, "non-exhaustive visitor!");
     }, atom.var);
   }
-
+  
   std::unique_ptr<sql::Expression>
   toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
@@ -646,9 +651,9 @@ struct NonArithmeticOperatorExpression : public Expression
         const auto itVarInfo = varsQueryInfo.find(arg);
         if(itVarInfo == varsQueryInfo.end())
           throw std::logic_error("toSQLExpressionTree doesn't have required information for the var.");
-
+        
         const VarQueryInfo& info = itVarInfo->second;
-
+        
         if(!mayPropertyName.has_value())
         {
           if(labels.empty())
@@ -657,6 +662,7 @@ struct NonArithmeticOperatorExpression : public Expression
           {
             if(info.variableLabels.has_value())
             {
+              // The variable label has ben specified so we are able to evaluate.
               const bool labelConstraintOK = [&]()
               {
                 for(const auto & requiredLabel : labels.labels)
@@ -664,26 +670,46 @@ struct NonArithmeticOperatorExpression : public Expression
                     return false;
                 return true;
               }();
-              if(labelConstraintOK)
+              if(labelConstraintOK == !negated)
                 return std::make_unique<sql::True>();
               else
                 return std::make_unique<sql::False>();
             }
             else
             {
-              // we don't know which label(s) the elements corresponding ot the variable will have
+              // We don't know which label(s) the elements corresponding to the variable will have.
               if(!info.typeIndexSQLQueryColumn.has_value())
                 throw std::logic_error("toSQLExpressionTree: var info must either have labels or type index sql query column.");
               std::set<sql::ElementTypeIndex> typeIndices;
+              bool someLabelDoesntExist{};
               for(const auto & label: labels.labels)
               {
                 if(auto index = info.allElementTypes.get().getIfExists(label))
                   typeIndices.insert(*index);
                 else
                   // a required label does not exist as type in the DB.
-                  return std::make_unique<sql::False>();
+                  someLabelDoesntExist = true;
               }
-              return std::make_unique<sql::ElementLabelsConstraints>(*info.typeIndexSQLQueryColumn, typeIndices);
+              if(negated)
+              {
+                // negation for Labels : AND (label1, label2, ...) becomes OR (NOT label1, NOT label2, ...)
+                std::vector<std::unique_ptr<sql::Expression>> sqlSubExprs;
+                for(auto const index : typeIndices)
+                {
+                  auto exp = std::make_unique<sql::ElementLabelsConstraints>(*info.typeIndexSQLQueryColumn,
+                                                                             std::set<sql::ElementTypeIndex>{index});
+                  auto negatedExp = std::make_unique<sql::Not>(std::move(exp));
+                  sqlSubExprs.push_back(std::move(negatedExp));
+                }
+                return std::make_unique<sql::AggregateExpression>(sql::Aggregator::OR, std::move(sqlSubExprs));
+              }
+              else
+              {
+                if(someLabelDoesntExist)
+                  return std::make_unique<sql::False>();
+                else
+                  return std::make_unique<sql::ElementLabelsConstraints>(*info.typeIndexSQLQueryColumn, typeIndices);
+              }
             }
           }
         }
@@ -693,32 +719,48 @@ struct NonArithmeticOperatorExpression : public Expression
           ValueType::String}))
         {
           // The property is not a SQL field so we return a null node.
+          //
+          // Note that the negation of NULL is still NULL, so we don't use |negate| in this branch.
           return std::make_unique<sql::Null>();
         }
         else
         {
+          if(negated)
+            // Is this a valid query?
+            throw std::logic_error("asMaximalANDAggregation todo support negation for SQL Table Column");
+
           // The property is a SQL Table Column so we return it.
-          
           if(const auto it = info.cypherPropertyToSQLQueryColumnName.find(*mayPropertyName); it != info.cypherPropertyToSQLQueryColumnName.end())
             return std::make_unique<sql::QueryColumn>(it->second);
-          // The contract is that the caller will use the property name as query column name.
+          // The caller will use the property name as query column name.
           return std::make_unique<sql::QueryColumn>(sql::QueryColumnName{mayPropertyName->symbolicName.str});
         }
       }
       else if constexpr (std::is_same_v<T, Literal>)
       {
+        if(negated)
+          throw std::logic_error("asMaximalANDAggregation todo support negation for Literal.");
         if(mayPropertyName.has_value())
           throw std::logic_error("A literal should have no property");
         return arg.toSQLExpressionTree();
       }
       else if constexpr (std::is_same_v<T, AggregateExpression>)
       {
+        if(negated)
+          throw std::logic_error("asMaximalANDAggregation todo support negation for AggregateExpression.");
         return arg.toSQLExpressionTree(sqlFields, varsQueryInfo);
       }
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     },atom.var);
   }
+  
+  Atom atom;
+  std::optional<PropertyKeyName> mayPropertyName;
+  Labels labels;
+  
+private:
+  bool negated{};
 };
 
 
@@ -728,9 +770,11 @@ struct PartialComparisonExpression{
 };
 struct ComparisonExpression : public Expression {
   static constexpr const char * c_name {"ComparisonExpression"};
-  
-  NonArithmeticOperatorExpression leftExp;
-  PartialComparisonExpression partial;
+    
+  void negate()
+  {
+    negated = !negated;
+  }
   
   std::unique_ptr<Expression> StealAsPtr() override
   {
@@ -769,8 +813,17 @@ struct ComparisonExpression : public Expression {
 
     std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, varsQueryInfo);
     std::unique_ptr<sql::Expression> right = partial.rightExp.toSQLExpressionTree(sqlFields, varsQueryInfo);
-    return std::make_unique<sql::ComparisonExpression>(std::move(left), partial.comp, std::move(right));
+
+    const Comparison actualComp = negated ? negateComparison(partial.comp) : partial.comp;
+
+    return std::make_unique<sql::ComparisonExpression>(std::move(left), actualComp, std::move(right));
   }
+
+  NonArithmeticOperatorExpression leftExp;
+  PartialComparisonExpression partial;
+
+private:
+  bool negated{};
 };
 
 

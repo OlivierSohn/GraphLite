@@ -584,9 +584,35 @@ std::any MyCypherVisitor::visitOC_AndExpression(CypherParser::OC_AndExpressionCo
 
 std::any MyCypherVisitor::visitOC_NotExpression(CypherParser::OC_NotExpressionContext *context) {
   auto _ = scope("NotExpression");
-  if(context->children.size() != 1)
+  const bool negate = 1 == (context->NOT().size() % 2);
+  if(auto p = context->oC_ComparisonExpression())
   {
-    m_errors.push_back("OC_NotExpression expects a single child");
+    auto res = p->accept(this);
+    if(negate)
+    {
+      if(res.type() == typeid(ComparisonExpression))
+      {
+        auto res2 = std::move(std::any_cast<ComparisonExpression>(res));
+        res2.negate();
+        return res2;
+      }
+      else if(res.type() == typeid(NonArithmeticOperatorExpression))
+      {
+        auto res2 = std::move(std::any_cast<NonArithmeticOperatorExpression>(res));
+        res2.negate();
+        return res2;
+      }
+      else
+      {
+        m_errors.push_back("OC_NotExpression expects a ComparisonExpression");
+        return {};
+      }
+    }
+    return res;
+  }
+  else
+  {
+    m_errors.push_back("OC_NotExpression expects oC_ComparisonExpression");
     return {};
   }
   return context->children[0]->accept(this);

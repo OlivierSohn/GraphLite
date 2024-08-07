@@ -118,12 +118,8 @@ int main()
   {
     runCypher("MATCH (`n`) WHERE n:Node1      RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`) WHERE n:Node1 AND n:Node2     RETURN id(`n`), `n`.test, `n`.`what`;");
-    // this is ok
     runCypher("MATCH (`n`) WHERE n:Node1 OR n.test = 2     RETURN id(`n`), `n`.test, `n`.`what`;");
     
-    // but verify this throws
-    runCypher("MATCH ((n)-[r]->(m)) WHERE n:Node1 OR m.test = 2     RETURN id(`n`), `n`.test, `n`.`what`;");
-
     runCypher("MATCH (`n`)       RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node1) RETURN id(`n`), `n`.test, `n`.`what`;");
     runCypher("MATCH (`n`:Node2) RETURN id(`n`), `n`.test, `n`.`what`;");
@@ -170,13 +166,6 @@ int main()
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 1;");
     runCypher("MATCH ()-[`r`]->()-[]->(a) RETURN id(`r`), `r`.testRel, `r`.`whatRel`, id(a) LIMIT 0;");
 
-    // todo deduce labels from where clause:
-    //runCypher("MATCH (`n`) WHERE n:Node1 OR n:Node2 RETURN id(`n`), `n`.test, `n`.`what`;");
-    // - and move the top such expressions out of the AND maximal aggregation to convert them to label constraints
-    // and AND them with path pattern labels (if the AND results in an empty intersection, return)
-    // so that they can be applied during the system relationships query.
-    // - We have the guarantee that idFilters won't contain any of them so we don't need an element type
-
     // todo suport creating an index on a property type.
 
     // todo optimize LIMIT implementation for path patterns, to reduce the numbers of SQL rows fetched:
@@ -203,6 +192,7 @@ int main()
 
     // todo support non-equi-var expressions, by evaluating them manually before returning results.
     // i.e: WHERE n.weight > 3 OR r.status = 2
+    // i.e: WHERE n.weight > 3 OR r:Rel1
 
     // TODO support UNION
 
