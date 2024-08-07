@@ -347,8 +347,9 @@ private:
 
 // For now does not support String / Null parts, only List part.
 struct StringListNullPredicateExpression : public Expression {
-  StringListNullPredicateExpression(std::unique_ptr<Expression> && left, std::unique_ptr<Expression> && right)
+  StringListNullPredicateExpression(std::unique_ptr<Expression> && left, bool negate, std::unique_ptr<Expression> && right)
   : m_left(std::move(left))
+  , m_negate(negate)
   , m_right(std::move(right))
   {
     std::optional<Type> type;
@@ -378,12 +379,15 @@ struct StringListNullPredicateExpression : public Expression {
   void toString(std::ostream& os, QueryVars& vars) const override
   {
     m_left->toString(os, vars);
+    if(m_negate)
+      os << " NOT ";
     os << " IN ";
     m_right->toString(os, vars);
   }
   
 private:
   std::unique_ptr<Expression> m_left;
+  bool m_negate;
   std::unique_ptr<Expression> m_right;
 
   enum class Type{

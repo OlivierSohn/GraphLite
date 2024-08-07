@@ -385,8 +385,10 @@ struct Expression
 {
   virtual ~Expression() = default;
   
-  virtual std::unique_ptr<Expression> StealAsPtr() = 0;
+  virtual std::shared_ptr<Expression> StealAsPtr() = 0;
     
+  virtual void negate() = 0;
+
   // Returns |exprs| containing expressions grouped by used variables and properties.
   //
   // The Expression is equivalent to an And-aggregation of all expressions in |exprs|.
@@ -436,18 +438,18 @@ struct Expression
 struct SubExpressions
 {
   SubExpressions()
-  : m_exprs(std::make_shared<std::vector<std::unique_ptr<Expression>>>())
+  : m_exprs(std::make_shared<std::vector<std::shared_ptr<Expression>>>())
   {}
   
-  void push_back(std::unique_ptr<Expression> && ptr)
+  void push_back(std::shared_ptr<Expression> && ptr)
   {
     m_exprs->push_back(std::move(ptr));
   }
   
-  const std::vector<std::unique_ptr<Expression>>& get() const { return *m_exprs; }
+  const std::vector<std::shared_ptr<Expression>>& get() const { return *m_exprs; }
   
 private:
-  std::shared_ptr<std::vector<std::unique_ptr<Expression>>> m_exprs;
+  std::shared_ptr<std::vector<std::shared_ptr<Expression>>> m_exprs;
 };
 
 
@@ -481,24 +483,94 @@ inline sql::Aggregator toSqlAggregator(Aggregator a)
   }
 }
 
+// We do lazy negation to be performant in the case of deep and large expression trees
+// that use a nested negations.
+struct LazylyNegatedExpresion : public Expression
+{
+  void negate() override
+  {
+    m_negate = !m_negate;
+  }
+  
+  void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
+  {
+    negateIfNeeded();
+    implAsMaximalANDAggregation(exprs);
+  }
+  
+  VarsUsages varsUsages() const override
+  {
+    negateIfNeeded();
+    return implVarsUsages();
+  }
+
+  std::unique_ptr<sql::Expression>
+  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
+                      const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
+  {
+    negateIfNeeded();
+    return implToSQLExpressionTree(sqlFields, varsQueryInfo);
+  }
+  
+private:
+  mutable bool m_negate{};
+  
+  virtual void implAsMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const = 0;
+  virtual VarsUsages implVarsUsages() const = 0;
+  virtual std::unique_ptr<sql::Expression>
+  implToSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
+                          const std::map<Variable, VarQueryInfo>& varsQueryInfo) const = 0;
+
+  virtual void implNegate() const = 0;
+
+  void negateIfNeeded() const
+  {
+    if(m_negate)
+    {
+      implNegate();
+      m_negate = false;
+    }
+  }
+};
+
 // Guaranteed to contain 2 or more sub-expressions
-struct AggregateExpression : public Expression
+struct AggregateExpression : public LazylyNegatedExpresion
 {
   AggregateExpression(Aggregator a)
   : m_aggregator(a)
   {}
 
+  void implNegate() const override
+  {
+    switch(m_aggregator)
+    {
+      case Aggregator::XOR:
+        throw std::logic_error("Xor is not supported");
+        break;
+      case Aggregator::OR:
+        m_aggregator = Aggregator::AND;
+        for(auto & exp: subExpressions())
+          exp->negate();
+        break;
+      case Aggregator::AND:
+        m_aggregator = Aggregator::OR;
+        for(auto & exp: subExpressions())
+          exp->negate();
+        break;
+    }
+  }
+
   void add(Expression && e)
   {
     add(e.StealAsPtr());
   }
-  void add(std::unique_ptr<Expression> && ptr)
+  void add(std::shared_ptr<Expression> && ptr)
   {
     m_subExprs.push_back(std::move(ptr));
   }
-  const std::vector<std::unique_ptr<Expression>>& subExpressions() const { return m_subExprs.get(); }
+  const std::vector<std::shared_ptr<Expression>>& subExpressions() const { return m_subExprs.get(); }
 
-  void asMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
+  void implAsMaximalANDAggregation(ExpressionsByVarsUsages& exprs) const override
   {
     switch(m_aggregator)
     {
@@ -531,7 +603,7 @@ struct AggregateExpression : public Expression
     }
   }
 
-  VarsUsages varsUsages() const override
+  VarsUsages implVarsUsages() const override
   {
     VarsUsages res;
     for(const auto & exp: subExpressions())
@@ -542,7 +614,7 @@ struct AggregateExpression : public Expression
   }
 
   std::unique_ptr<sql::Expression>
-  toSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
+  implToSQLExpressionTree(const std::set<PropertySchema>& sqlFields,
                       const std::map<Variable, VarQueryInfo>& varsQueryInfo) const override
   {
     std::vector<std::unique_ptr<sql::Expression>> sqlSubExprs;
@@ -553,21 +625,21 @@ struct AggregateExpression : public Expression
 
   Aggregator aggregator() const { return m_aggregator; }
 
-  std::unique_ptr<Expression> StealAsPtr() override
+  std::shared_ptr<Expression> StealAsPtr() override
   {
-    auto ptr = std::make_unique<AggregateExpression>(m_aggregator);
+    auto ptr = std::make_shared<AggregateExpression>(m_aggregator);
     *ptr = std::move(*this);
     return ptr;
   };
 private:
   SubExpressions m_subExprs;
-  Aggregator m_aggregator;
+  mutable Aggregator m_aggregator;
 };
 
 
 struct Atom
 {
-  std::variant<Variable, Literal, AggregateExpression> var;
+  std::variant<Variable, Literal, std::shared_ptr<Expression>> var;
 };
 
 
@@ -575,14 +647,24 @@ struct NonArithmeticOperatorExpression : public Expression
 {
   static constexpr const char * c_name {"NonArithmeticOperatorExpression"};
   
-  void negate()
+  void negate() override
   {
-    negated = !negated;
+    std::visit([&](auto && arg) {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, Variable>)
+        negated = !negated;
+      else if constexpr (std::is_same_v<T, Literal>)
+        negated = !negated;
+      else if constexpr (std::is_same_v<T, std::shared_ptr<Expression>>)
+        arg->negate();
+      else
+        static_assert(c_false<T>, "non-exhaustive visitor!");
+    }, atom.var);
   }
 
-  std::unique_ptr<Expression> StealAsPtr() override
+  std::shared_ptr<Expression> StealAsPtr() override
   {
-    auto ptr = std::make_unique<NonArithmeticOperatorExpression>();
+    auto ptr = std::make_shared<NonArithmeticOperatorExpression>();
     *ptr = std::move(*this);
     return ptr;
   };
@@ -602,12 +684,8 @@ struct NonArithmeticOperatorExpression : public Expression
       }
       else if constexpr (std::is_same_v<T, Literal>)
         throw std::logic_error("asMaximalANDAggregation didn't expect a literal.");
-      else if constexpr (std::is_same_v<T, AggregateExpression>)
-      {
-        if(negated)
-          throw std::logic_error("asMaximalANDAggregation todo support negation for AggregateExpression.");
-        arg.asMaximalANDAggregation(exprs);
-      }
+      else if constexpr (std::is_same_v<T, std::shared_ptr<Expression>>)
+        arg->asMaximalANDAggregation(exprs);
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     }, atom.var);
@@ -628,13 +706,9 @@ struct NonArithmeticOperatorExpression : public Expression
         return res;
       }
       else if constexpr (std::is_same_v<T, Literal>)
-      {
         return {};
-      }
-      else if constexpr (std::is_same_v<T, AggregateExpression>)
-      {
-        return arg.varsUsages();
-      }
+      else if constexpr (std::is_same_v<T, std::shared_ptr<Expression>>)
+        return arg->varsUsages();
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     }, atom.var);
@@ -727,7 +801,7 @@ struct NonArithmeticOperatorExpression : public Expression
         {
           if(negated)
             // Is this a valid query?
-            throw std::logic_error("asMaximalANDAggregation todo support negation for SQL Table Column");
+            throw std::logic_error("toSQLExpressionTree todo support negation for SQL Table Column");
 
           // The property is a SQL Table Column so we return it.
           if(const auto it = info.cypherPropertyToSQLQueryColumnName.find(*mayPropertyName); it != info.cypherPropertyToSQLQueryColumnName.end())
@@ -739,17 +813,13 @@ struct NonArithmeticOperatorExpression : public Expression
       else if constexpr (std::is_same_v<T, Literal>)
       {
         if(negated)
-          throw std::logic_error("asMaximalANDAggregation todo support negation for Literal.");
+          throw std::logic_error("toSQLExpressionTree todo support negation for Literal.");
         if(mayPropertyName.has_value())
           throw std::logic_error("A literal should have no property");
         return arg.toSQLExpressionTree();
       }
-      else if constexpr (std::is_same_v<T, AggregateExpression>)
-      {
-        if(negated)
-          throw std::logic_error("asMaximalANDAggregation todo support negation for AggregateExpression.");
-        return arg.toSQLExpressionTree(sqlFields, varsQueryInfo);
-      }
+      else if constexpr (std::is_same_v<T, std::shared_ptr<Expression>>)
+        return arg->toSQLExpressionTree(sqlFields, varsQueryInfo);
       else
         static_assert(c_false<T>, "non-exhaustive visitor!");
     },atom.var);
@@ -776,9 +846,9 @@ struct ComparisonExpression : public Expression {
     negated = !negated;
   }
   
-  std::unique_ptr<Expression> StealAsPtr() override
+  std::shared_ptr<Expression> StealAsPtr() override
   {
-    auto ptr = std::make_unique<ComparisonExpression>();
+    auto ptr = std::make_shared<ComparisonExpression>();
     *ptr = std::move(*this);
     return ptr;
   };
@@ -836,10 +906,16 @@ struct StringListNullPredicateExpression : public Expression {
   // will be a variant later.
   // For the List case, inList.variant is a std::vector<std::string>
   Literal inList;
+  bool m_negate{};
   
-  std::unique_ptr<Expression> StealAsPtr() override
+  void negate() override
   {
-    auto ptr = std::make_unique<StringListNullPredicateExpression>();
+    m_negate = !m_negate;
+  }
+  
+  std::shared_ptr<Expression> StealAsPtr() override
+  {
+    auto ptr = std::make_shared<StringListNullPredicateExpression>();
     *ptr = std::move(*this);
     return ptr;
   };
@@ -859,7 +935,7 @@ struct StringListNullPredicateExpression : public Expression {
   {
     std::unique_ptr<sql::Expression> left = leftExp.toSQLExpressionTree(sqlFields, varsQueryInfo);
     std::unique_ptr<sql::Expression> right = inList.toSQLExpressionTree();
-    return std::make_unique<sql::StringListNullPredicateExpression>(std::move(left), std::move(right));
+    return std::make_unique<sql::StringListNullPredicateExpression>(std::move(left), m_negate, std::move(right));
   }
 };
 

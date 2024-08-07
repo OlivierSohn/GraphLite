@@ -255,7 +255,7 @@ private:
 
 namespace detail
 {
-std::unique_ptr<Expression> tryStealAsExpressionPtr(std::any && res);
+std::shared_ptr<Expression> tryStealAsExpressionPtr(std::any && res);
 }
 
 // subExpressions is expected to have 2 or more elements.

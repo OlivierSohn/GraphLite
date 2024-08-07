@@ -6,7 +6,7 @@ namespace openCypher
 
 namespace detail
 {
-std::unique_ptr<Expression> tryStealAsExpressionPtr(std::any && res)
+std::shared_ptr<Expression> tryStealAsExpressionPtr(std::any && res)
 {
   if(res.type() == typeid(NonArithmeticOperatorExpression))
     return std::any_cast<NonArithmeticOperatorExpression>(res).StealAsPtr();
@@ -343,7 +343,7 @@ std::any MyCypherVisitor::visitOC_Where(CypherParser::OC_WhereContext *context) 
 
   auto res = context->oC_Expression()->accept(this);
   if(auto ptr = detail::tryStealAsExpressionPtr(std::move(res)))
-    return WhereClause{std::shared_ptr<Expression>{ptr.release()}};
+    return WhereClause{ptr};
   m_errors.push_back("OC_Where encounterd unsupported expression.");
   return {};
 }
@@ -884,7 +884,11 @@ std::any MyCypherVisitor::visitOC_Atom(CypherParser::OC_AtomContext *context) {
   else if(res.type() == typeid(Literal))
     return Atom{std::move(std::any_cast<Literal>(res))};
   else if(res.type() == typeid(AggregateExpression))
-    return Atom{std::move(std::any_cast<AggregateExpression>(res))};
+    return Atom{std::move(std::any_cast<AggregateExpression>(res)).StealAsPtr()};
+  else if(res.type() == typeid(ComparisonExpression))
+    return Atom{std::move(std::any_cast<ComparisonExpression>(res)).StealAsPtr()};
+  else if(res.type() == typeid(StringListNullPredicateExpression))
+    return Atom{std::move(std::any_cast<StringListNullPredicateExpression>(res)).StealAsPtr()};
   else if(res.type() == typeid(NonArithmeticOperatorExpression))
     // To support the id(...) function, we rewrite the function call into a property access.
     return res;
