@@ -138,3 +138,11 @@ void printChart(std::ostream&os,
     printValues(values);
   os << separatorLine << std::endl;
 }
+
+std::string toLower(std::string const & str)
+{
+  auto str2 = str;
+  std::transform(str2.begin(), str2.end(), str2.begin(),
+                 [](unsigned char c){ return std::tolower(c); });
+  return str2;
+}

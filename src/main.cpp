@@ -33,18 +33,17 @@ int main()
       std::cout << "[openCypher] " << cypherQuery << std::endl;
       m_logIndentScope = std::make_unique<LogIndentScope>();
     }
-    void onOrderAndColumnNames(const ResultOrder& ro, const std::vector<openCypher::Variable>& vars, const VecColumnNames& colNames) {
-      m_resultOrder = ro;
-      m_variables = vars;
-      m_columnNames = colNames;
+    void onColumns(const std::vector<std::string>& columns) {
+      m_columns = columns;
     }
     
-    void onRow(const VecValues& values)
+    void onRow(const ResultOrder& resultOrder, const VecValues& values)
     {
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
-      for(const auto & [i, j] : m_resultOrder)
-        std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j] << '|';
+      size_t col{};
+      for(const auto & [i, j] : resultOrder)
+        std::cout << m_columns[col++] << " = " << (*values[i])[j] << '|';
       std::cout << std::endl;
     }
     void onCypherQueryEnds()
@@ -54,9 +53,8 @@ int main()
 
   private:
     std::unique_ptr<LogIndentScope> m_logIndentScope;
-    ResultOrder m_resultOrder;
     std::vector<openCypher::Variable> m_variables;
-    VecColumnNames m_columnNames;
+    std::vector<std::string> m_columns;
   };
   
   const bool printSQLRequests{true};

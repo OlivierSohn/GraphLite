@@ -94,26 +94,24 @@ void QueryResultsHandler<ID>::onCypherQueryStarts(std::string const & cypherQuer
 }
 
 template<typename ID>
-void QueryResultsHandler<ID>::onOrderAndColumnNames(const ResultOrder& ro, const std::vector<openCypher::Variable>& vars, const VecColumnNames& colNames) {
-  m_resultOrder = ro;
-  m_variables = vars;
-  m_columnNames = colNames;
+void QueryResultsHandler<ID>::onColumns(const std::vector<std::string>& columns) {
+  m_columnNames = columns;
 }
-
 template<typename ID>
-void QueryResultsHandler<ID>::onRow(const VecValues& values)
+void QueryResultsHandler<ID>::onRow(const ResultOrder& resultOrder, const VecValues& values)
 {
   if(m_printCypherRows)
   {
     auto _ = LogIndentScope();
     std::cout << LogIndent{};
-    for(const auto & [i, j] : m_resultOrder)
-      std::cout << m_variables[i] << "." << (*m_columnNames[i])[j] << " = " << (*values[i])[j] << '|';
+    size_t col{};
+    for(const auto & [i, j] : resultOrder)
+      std::cout << m_columnNames[col++] << " = " << (*values[i])[j] << '|';
     std::cout << std::endl;
   }
   auto & row = m_rows.emplace_back();
-  row.reserve(m_resultOrder.size());
-  for(const auto & [i, j] : m_resultOrder)
+  row.reserve(resultOrder.size());
+  for(const auto & [i, j] : resultOrder)
     row.push_back(copy((*values[i])[j]));
 }
 

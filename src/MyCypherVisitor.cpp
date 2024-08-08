@@ -70,59 +70,75 @@ std::any MyCypherVisitor::defaultVisit(const char * funcName, int line, antlr4::
 
 std::any MyCypherVisitor::visitOC_Cypher(CypherParser::OC_CypherContext *context) {
   auto _ = scope("Cypher");
-  for(const auto & child : context->children)
-  {
-    auto res = child->accept(this);
-    if(res.type() == typeid(SingleQuery))
-      return res;
-  }
-  m_errors.push_back("OC_Cypher not supported.");
+  if(auto p = context->oC_Statement())
+    return p->accept(this);
+  m_errors.push_back("OC_Cypher expects oC_Statement.");
   return {};
 }
 
 std::any MyCypherVisitor::visitOC_Statement(CypherParser::OC_StatementContext *context) {
   auto _ = scope("Statement");
-  if(context->children.size() != 1)
-  {
-    m_errors.push_back("OC_Statement Expected size of children 1");
-    return {};
-  }
-  return context->children[0]->accept(this);
+  if(auto p = context->oC_Query())
+    return p->accept(this);
+  m_errors.push_back("OC_Statement expects oC_Query.");
+  return {};
 }
 
 std::any MyCypherVisitor::visitOC_Query(CypherParser::OC_QueryContext *context) {
   auto _ = scope("Query");
-  if(context->children.size() != 1)
+  if(auto p = context->oC_RegularQuery())
   {
-    m_errors.push_back("OC_Query Expected size of children 1");
-    return {};
+    auto res = p->accept(this);
+    if(res.type() == typeid(RegularQuery))
+      return res;
+    else
+      m_errors.push_back("OC_RegularQuery expected RegularQuery.");
   }
-  auto res = context->children[0]->accept(this);
-  if(res.type() == typeid(SingleQuery))
-    return res;
-  else
+  if(auto p = context->oC_StandaloneCall())
+  {
     m_errors.push_back("OC_RegularQuery only supports SingleQuery for now.");
+  }
   return {};
 }
 
 std::any MyCypherVisitor::visitOC_RegularQuery(CypherParser::OC_RegularQueryContext *context) {
   auto _ = scope("RegularQuery");
-  if(context->children.size() != 1)
+  RegularQuery regularQuery{};
+  if(auto p = context->oC_SingleQuery())
   {
-    m_errors.push_back("OC_RegularQuery : union is not supported yet");
-    return {};
+    auto res = p->accept(this);
+    if(res.type() == typeid(SingleQuery))
+      regularQuery.unionAllSingleQueries.push_back(std::move(std::any_cast<SingleQuery>(res)));
+    else
+      m_errors.push_back("OC_RegularQuery only supports SingleQuery.");
   }
-  auto res = context->children[0]->accept(this);
-  if(res.type() == typeid(SingleQuery))
-    return res;
-  else
-    m_errors.push_back("OC_RegularQuery only supports SingleQuery.");
-  return {};
+  for(const auto & unionTerm : context->oC_Union())
+  {
+    auto res = unionTerm->accept(this);
+    if(res.type() == typeid(UnionAll))
+      regularQuery.unionAllSingleQueries.push_back(std::move(std::any_cast<UnionAll>(res).query));
+    else
+      m_errors.push_back("OC_RegularQuery only supports UNION ALL.");
+  }
+  return regularQuery;
 }
 
 std::any MyCypherVisitor::visitOC_Union(CypherParser::OC_UnionContext *context) {
-  m_errors.push_back("OC_Union not supported");
-  return defaultVisit("Union", __LINE__, context);
+  const bool isUnionAll = context->ALL();
+  SingleQuery singleQuery;
+  if(auto p = context->oC_SingleQuery())
+  {
+    auto res = p->accept(this);
+    if(res.type() == typeid(SingleQuery))
+    {
+      if(isUnionAll)
+        return UnionAll{ std::move(std::any_cast<SingleQuery>(res)) };
+      else
+        return Union{ std::move(std::any_cast<SingleQuery>(res)) };
+    }
+    else
+      m_errors.push_back("OC_RegularQuery only supports SingleQuery.");
+  }
 }
 
 std::any MyCypherVisitor::visitOC_SingleQuery(CypherParser::OC_SingleQueryContext *context) {
@@ -299,8 +315,8 @@ std::any MyCypherVisitor::visitOC_ProjectionItems(CypherParser::OC_ProjectionIte
   {
     auto res = projItem->accept(this);
     // TODO support '*'
-    if(res.type() == typeid(NonArithmeticOperatorExpression))
-      p.naoExps.push_back(std::move(std::any_cast<NonArithmeticOperatorExpression>(res)));
+    if(res.type() == typeid(ProjectionItem))
+      p.items.push_back(std::move(std::any_cast<ProjectionItem>(res)));
     else
     {
       m_errors.push_back("OC_ProjectionItems expect NonArithmeticOperatorExpression");
@@ -312,14 +328,39 @@ std::any MyCypherVisitor::visitOC_ProjectionItems(CypherParser::OC_ProjectionIte
 
 std::any MyCypherVisitor::visitOC_ProjectionItem(CypherParser::OC_ProjectionItemContext *context) {
   auto _ = scope("ProjectionItem");
-  if(context->children.size() != 1)
+  if(auto p = context->oC_Expression())
   {
-    // TODO support entire grammar
-    m_errors.push_back("OC_ProjectionItem expects a single child");
-    return {};
+    auto exp = p->accept(this);
+    if(exp.type() != typeid(NonArithmeticOperatorExpression))
+    {
+      m_errors.push_back("OC_ProjectionItems expects NonArithmeticOperatorExpression");
+      return {};
+    }
+
+    std::optional<Variable> asVar;
+    if(context->AS())
+    {
+      if(auto pVar = context->oC_Variable())
+      {
+        auto res = pVar->accept(this);
+        if(res.type() != typeid(Variable))
+        {
+          m_errors.push_back("OC_ProjectionItems expects Variable");
+          return {};
+        };
+        asVar = std::move(std::any_cast<Variable>(res));
+      }
+      else
+        m_errors.push_back("OC_ProjectionItem expects oC_Variable");
+    }
+    return ProjectionItem{
+      std::move(std::any_cast<NonArithmeticOperatorExpression>(exp)),
+      std::move(asVar)
+    };
   }
-  
-  return context->children[0]->accept(this);
+  else
+    m_errors.push_back("OC_ProjectionItem expects oC_Expression");
+  return {};
 }
 
 std::any MyCypherVisitor::visitOC_Order(CypherParser::OC_OrderContext *context) { return defaultVisit("Order", __LINE__, context); }
@@ -1011,9 +1052,7 @@ std::any MyCypherVisitor::visitOC_FunctionName(CypherParser::OC_FunctionNameCont
     return {};
   }
   const auto & sname = std::any_cast<SymbolicName>(name);
-  std::string lowerName;
-  for(const auto c : sname.str)
-    lowerName.push_back(std::tolower(c));
+  const std::string lowerName = toLower(sname.str);
   if(lowerName != "id")
   {
     m_errors.push_back("OC_FunctionInvocation with non-id function name is not supported yet");

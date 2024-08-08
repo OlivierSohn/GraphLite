@@ -52,16 +52,14 @@ enum class Overwrite{Yes, No};
 
 // Contains information to order results in the same order as they were specified in the return clause.
 using ResultOrder = std::vector<std::pair<
-unsigned /* i = index into VecValues, VecColumnNames*/,
-unsigned /* j = index into *VecValues[i], *VecColumnNames[i] */>>;
+unsigned /* i = index into VecValues*/,
+unsigned /* j = index into *VecValues[i]*/>>;
 
-using VecColumnNames = std::vector<const std::vector<openCypher::PropertyKeyName>*>;
 using VecValues = std::vector<const std::vector<Value>*>;
 
-using FuncResults = std::function<void(const ResultOrder&,
-                                       const std::vector<openCypher::Variable>&,
-                                       const VecColumnNames&,
-                                       const VecValues&)>;
+using FuncColumns = std::function<void(const std::vector<std::string>&)>;
+
+using FuncResults = std::function<void(const ResultOrder&, const VecValues&)>;
 
 using FuncOnSQLQuery = std::function<void(std::string const & sqlQuery)>;
 using FuncOnSQLQueryDuration = std::function<void(const std::chrono::steady_clock::duration)>;

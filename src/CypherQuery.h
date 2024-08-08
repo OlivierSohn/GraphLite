@@ -25,23 +25,19 @@ namespace openCypher
 {
 namespace detail
 {
-SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
-                             const std::string& query,
-                             const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
-                             bool printCypherAST);
+RegularQuery cypherQueryToAST(const PropertySchema& idProperty,
+                              const std::string& query,
+                              const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
+                              bool printCypherAST);
 
-using FOnOrderAndColumnNames = std::function<void(const ResultOrder&,
-                                                  const std::vector<Variable>&,
-                                                  const VecColumnNames&)>;
-
-using FOnRow = std::function<void(const VecValues&)>;
+using FOnColumns = std::function<void(const std::vector<std::string>&)>;
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
 template<typename ID>
-void runSingleQuery(const SingleQuery& q,
+void runSingleQuery(const RegularQuery& q,
                     GraphDB<ID>& db,
-                    const FOnOrderAndColumnNames& fOnOrderAndColumnNames,
-                    const FOnRow& fOnRow);
+                    const FOnColumns& fOnColumns,
+                    const FuncResults& fOnRow);
 }
 
 
@@ -66,10 +62,10 @@ void runCypher(const std::string& cypherQuery,
   } scope{resultsHandler};
 
   runSingleQuery(ast, db,
-                 [&](const ResultOrder& ro, const std::vector<Variable>& varNames, const VecColumnNames& colNames)
-                 { resultsHandler.onOrderAndColumnNames(ro, varNames, colNames); },
-                 [&](const VecValues& values)
-                 { resultsHandler.onRow(values); });
+                 [&](const std::vector<std::string>& colNames)
+                 { resultsHandler.onColumns(colNames); },
+                 [&](const ResultOrder& ro, const VecValues& values)
+                 { resultsHandler.onRow(ro, values); });
 }
 } // NS
 

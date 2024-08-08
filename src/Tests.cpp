@@ -1245,7 +1245,7 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(Value(123456), handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
-
+  
   handler.run("MATCH (a)-[r]->(b) WHERE (NOT (r.since <= 12345)) AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(1, handler.countRows());
@@ -1255,7 +1255,7 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(Value(123456), handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
-
+  
   handler.run("MATCH (a)-[r]->(b) WHERE NOT ((NOT (r.since > 12345)) OR a.age >= 107) return a.age, b.age, r.since");
   
   EXPECT_EQ(1, handler.countRows());
@@ -1265,7 +1265,7 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(Value(123456), handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
-
+  
   handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 AND a.age < 107 return a.age, b.age, r.since");
   
   EXPECT_EQ(1, handler.countRows());
@@ -1295,7 +1295,7 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(Value(123456), handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
-
+  
   handler.run("MATCH (b)<-[r]-(a) WHERE (NOT NOT (r.since IN [ 123456, 3764573645 ])) AND a.age IN [ 105, 3746573 ] return a.age, b.age, r.since");
   
   EXPECT_EQ(1, handler.countRows());
@@ -1305,8 +1305,8 @@ TEST(Test, WhereClauses)
   EXPECT_EQ(Value(123456), handler.rows()[0][2]);
   EXPECT_EQ(4, handler.countSQLQueries());
   // 4 because we need different queries on node and dualNode.
-
-
+  
+  
   // not supported yet: "A non-equi-var expression is using non-id properties"
   EXPECT_THROW(handler.run("MATCH (b)<-[r]-(a) WHERE r.since > 12345 OR a.age < 107 return a.age, b.age, r.since"), std::logic_error);
 }
@@ -1830,29 +1830,29 @@ TEST(Test, LabelConstraints)
   db.addType("E2", true, {p_age});
   db.addType("Rel1", false, {p_since});
   db.addType("Rel2", false, {p_since});
-
+  
   ID e10 = db.addNode("E1", mkVec(std::pair{p_age, Value(0)}));
   ID e11 = db.addNode("E1", mkVec(std::pair{p_age, Value(10)}));
   ID e12 = db.addNode("E1", mkVec(std::pair{p_age, Value(20)}));
   ID e13 = db.addNode("E1", mkVec(std::pair{p_age, Value(30)}));
-
+  
   ID e20 = db.addNode("E2", mkVec(std::pair{p_age, Value(0)}));
   ID e21 = db.addNode("E2", mkVec(std::pair{p_age, Value(10)}));
   ID e22 = db.addNode("E2", mkVec(std::pair{p_age, Value(20)}));
   ID e23 = db.addNode("E2", mkVec(std::pair{p_age, Value(30)}));
-
+  
   std::vector<int64_t> e1s{e10, e11, e12, e13};
   std::vector<int64_t> e2s{e20, e21, e22, e23};
   
   // e1s[i] has age 10*i
   // e2s[i] has age 10*i
-
+  
   // each e1x knows each e2y via rel1Id[x][y]
   // each e2y knows each e1x via rel2Id[x][y]
   //
   // e1x  -- rel1Id[x][y] --> e2y
   //     <-- rel2Id[x][y] --
-
+  
   std::vector<std::vector<int64_t>> rel1Id;
   std::vector<std::vector<int64_t>> rel2Id;
   for(int i=0; i < 4; ++i)
@@ -1865,9 +1865,9 @@ TEST(Test, LabelConstraints)
       rel2Id.back().push_back(db.addRelationship("Rel2", e2s[j], e1s[i], mkVec(std::pair{p_since, Value(static_cast<int64_t>(j))})));
     }
   }
-
+  
   QueryResultsHandler handler(*dbWrapper);
-
+  
   // Test single node query
   
   handler.run("MATCH (a:E1) WHERE NOT a:E1 return a.age");
@@ -1876,7 +1876,7 @@ TEST(Test, LabelConstraints)
   EXPECT_EQ(0, handler.rows().size());
   handler.run("MATCH (a:E1) WHERE a:E1 AND NOT a:E1 return a.age");
   EXPECT_EQ(0, handler.rows().size());
-
+  
   handler.run("MATCH (a) WHERE NOT a:E2 return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1893,7 +1893,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a:E1) WHERE NOT a:E2 return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1910,7 +1910,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a:E1) WHERE a:E1 return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1927,7 +1927,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a) WHERE (NOT a:E2) OR a.age > 25 return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1946,7 +1946,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a:E1) WHERE NOT a:NoType return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1963,7 +1963,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a) WHERE NOT a:E2 AND a.age > 5 return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1978,7 +1978,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a) WHERE NOT a:E2:E1 AND a.age > 5 return id(a)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -1999,10 +1999,10 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   
   // Test single relationship query
-
+  
   handler.run("MATCH ()-[r]->() WHERE (NOT r:Rel1 AND r.since > 2.5) OR (NOT r:Rel2 AND r.since < 0.5) return id(r)");
   // returns Rel1 where since = 0 and Rel2 where since = 3
   {
@@ -2028,13 +2028,13 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   // Test one hop pattern
-
+  
   handler.run("MATCH (a)-[r]->(b) WHERE a:E1 AND (NOT r:Rel1 AND r.since > 2.5) AND (NOT r:Rel2 AND r.since < 0.5) return id(r)");
   // conflicting constraints on r.since
   EXPECT_EQ(0, handler.rows().size());
-
+  
   handler.run("MATCH (a)-[r]->(b) WHERE a:E1 AND ((NOT r:Rel1 AND r.since > 2.5) OR (NOT r:Rel2 AND r.since < 0.5)) return id(r)");
   // returns Rel1 where since = 0 and Rel2 where since = 3
   {
@@ -2052,19 +2052,19 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   // a:E1:E2 evaluates to false because we only support a single label per entity.
   handler.run("MATCH (a)-[r]->(b) WHERE a:E1:E2 AND ((NOT r:Rel1 AND r.since > 2.5) OR (NOT r:Rel2 AND r.since < 0.5)) return id(r)");
   EXPECT_EQ(0, handler.rows().size());
-
-
+  
+  
   // Non-equi var expression using non-id properties is not supported yet.
   // To support this we should apply the filter at the end before returning the results.
   EXPECT_THROW(handler.run("MATCH (a)-[r]->(b) WHERE r:Rel2 OR a.age > 2.5 return id(r)"), std::exception);
   EXPECT_THROW(handler.run("MATCH (a)-[r]->(b) WHERE a:E1 OR b.age = 2 return id(r)"), std::exception);
   EXPECT_THROW(handler.run("MATCH (a)-[r]->(b) WHERE a:E1 AND (NOT r:Rel1 OR a.age > 2.5) AND (NOT r:Rel2 AND r.since < 0.5) return id(r)"), std::exception);
   EXPECT_THROW(handler.run("MATCH (a)-[r]->(b) WHERE (a:E1 AND (NOT r:Rel1 AND r.since > 2.5)) OR (NOT r:Rel2 AND r.since < 0.5) return id(r)"), std::exception);
-
+  
   // Test 2 hops pattern
   handler.run("MATCH (a)-[r]->(b:E2)-[r2]->(a) WHERE a:E1 AND ((NOT r:Rel1 AND r.since > 2.5) OR (NOT r:Rel2 AND r.since < 0.5)) return id(r), id(r2)");
   {
@@ -2082,7 +2082,7 @@ TEST(Test, LabelConstraints)
     const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
     EXPECT_EQ(expectedRes, actualRes);
   }
-
+  
   handler.run("MATCH (a)-[r]->(b)-[r2]->(c) WHERE id(c) = id(a) AND a:E1 AND ((NOT r:Rel1 AND r.since > 2.5) OR (NOT r:Rel2 AND r.since < 0.5)) return id(r), id(r2)");
   {
     const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
@@ -2101,4 +2101,95 @@ TEST(Test, LabelConstraints)
   }
 }
 
+
+TEST(Test, UnionAll)
+{
+  LogIndentScope _{};
+  
+  auto dbWrapper = std::make_unique<GraphWithStats<int64_t>>();
+  using ID = int64_t;
+  
+  auto & db = dbWrapper->getDB();
+  /*
+          -----
+         v     |
+   p1 -> p2 -> p3 -> p4
+   ^                 |
+   -----------------
+   */
+  const auto p_age = mkProperty("age");
+  const auto p_since = mkProperty("since");
+  db.addType("Person", true, {p_age});
+  db.addType("Knows", false, {p_since});
+  
+  ID p1 = db.addNode("Person", mkVec(std::pair{p_age, Value(1)}));
+  ID p2 = db.addNode("Person", mkVec(std::pair{p_age, Value(2)}));
+  ID p3 = db.addNode("Person", mkVec(std::pair{p_age, Value(3)}));
+  ID p4 = db.addNode("Person", mkVec(std::pair{p_age, Value(4)}));
+  ID r12 = db.addRelationship("Knows", p1, p2, mkVec(std::pair{p_since, Value(12)}));
+  ID r23 = db.addRelationship("Knows", p2, p3, mkVec(std::pair{p_since, Value(23)}));
+  ID r32 = db.addRelationship("Knows", p3, p2, mkVec(std::pair{p_since, Value(32)}));
+  ID r34 = db.addRelationship("Knows", p3, p4, mkVec(std::pair{p_since, Value(34)}));
+  ID r41 = db.addRelationship("Knows", p4, p1, mkVec(std::pair{p_since, Value(41)}));
+  
+  QueryResultsHandler handler(*dbWrapper);
+  //dbWrapper->m_printSQLRequests = true;
+  
+  handler.run("MATCH (a) WHERE a.age = 2 RETURN id(a) AS `id` UNION ALL MATCH ()-[r]->() WHERE r.since = 12 RETURN id(r) AS `id`");
+  {
+    const std::vector<std::string> expectedColumns{ "id" };
+    EXPECT_EQ(expectedColumns, handler.columns());
+    
+    const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
+      {
+        p2
+      }, {
+        r12
+      }
+    });
+    const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+  
+  handler.run("MATCH (a) WHERE a.age = 2 RETURN id(a) AS `id` LIMIT 1 UNION ALL MATCH ()-[r]->() WHERE r.since = 12 RETURN id(r) AS `id` LIMIT 1");
+  {
+    const std::vector<std::string> expectedColumns{ "id" };
+    EXPECT_EQ(expectedColumns, handler.columns());
+    
+    const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
+      {
+        p2
+      }, {
+        r12
+      }
+    });
+    const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
+  
+  // Verify query fails if the number of columns is different.
+  EXPECT_THROW(handler.run("MATCH (a) WHERE a.age = 2 RETURN id(a) AS `id` UNION ALL MATCH ()-[r]->() WHERE r.since = 12 RETURN id(r) as `id`, id(r) AS `id2`"), std::exception);
+  
+  // Verify query fails if the name of columns is different.
+  EXPECT_THROW(handler.run("MATCH (a) WHERE a.age = 2 RETURN id(a) AS `id` UNION ALL MATCH ()-[r]->() WHERE r.since = 12 RETURN id(r) AS `id2`"), std::exception);
+  
+  handler.run("MATCH (a)-[r]->(b) WHERE a.age = 2 AND b.age = 3 RETURN id(a) AS `ida`, id(b) AS `idb`"
+              " UNION ALL "
+              "MATCH (y)-[r]->(z) WHERE r.since = 32 RETURN id(y) AS `ida`, id(z) AS `idb` LIMIT 1");
+  {
+    const std::vector<std::string> expectedColumns{ "ida", "idb" };
+    EXPECT_EQ(expectedColumns, handler.columns());
+    
+    const auto expectedRes = toValues(std::set<std::vector<int64_t>>{
+      {
+        p2, p3
+      }, {
+        p3, p2
+      }
+    });
+    const std::set<std::vector<Value>> actualRes = toSet(handler.rows());
+    EXPECT_EQ(expectedRes, actualRes);
+  }
 }
+
+}  // NS
