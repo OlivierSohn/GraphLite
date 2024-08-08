@@ -20,16 +20,13 @@ int main()
     void onColumns(const std::vector<std::string>& columns) {
       m_columns = columns;
     }
-    void onOrder(const ResultOrder& ro) {
-      m_resultOrder = ro;
-    }
     
-    void onRow(const VecValues& values)
+    void onRow(const ResultOrder& resultOrder, const VecValues& values)
     {
       auto _ = LogIndentScope();
       std::cout << LogIndent{};
       size_t col{};
-      for(const auto & [i, j] : m_resultOrder)
+      for(const auto & [i, j] : resultOrder)
         std::cout << m_columns[col++] << " = " << (*values[i])[j] << '|';
       std::cout << std::endl;
     }
@@ -40,7 +37,6 @@ int main()
 
   private:
     std::unique_ptr<LogIndentScope> m_logIndentScope;
-    ResultOrder m_resultOrder;
     std::vector<openCypher::Variable> m_variables;
     std::vector<std::string> m_columns;
   };

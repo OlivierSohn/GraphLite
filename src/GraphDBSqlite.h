@@ -79,7 +79,7 @@ struct GraphDB
                                           const openCypher::Labels& labels,
                                           const std::vector<const Expression*>* filter,
                                           const std::optional<Limit>& limit,
-                                          FuncResults& f);
+                                          const FuncResults& f);
 
   struct VariableInfo {
     bool needsTypeInfo{};
@@ -90,7 +90,7 @@ struct GraphDB
                    const std::vector<PathPatternElement>& pathPattern,
                    const ExpressionsByVarsUsages& allFilters,
                    const std::optional<Limit>& limit,
-                   FuncResults& f);
+                   const FuncResults& f);
   
   // Time to run the SQL queries.
   mutable std::chrono::steady_clock::duration m_totalSQLQueryExecutionDuration{};

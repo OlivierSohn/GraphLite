@@ -1006,11 +1006,11 @@ GraphDB<ID>::computeTypeFilter(const Element e,
 
 template<typename ID>
 void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDirections,
-                          const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
-                          const std::vector<PathPatternElement>& pathPattern,
-                          const ExpressionsByVarsUsages& allFilters,
-                          const std::optional<Limit>& limit,
-                          FuncResults& f)
+                              const std::map<Variable, std::vector<ReturnClauseTerm>>& variablesInfo,
+                              const std::vector<PathPatternElement>& pathPattern,
+                              const ExpressionsByVarsUsages& allFilters,
+                              const std::optional<Limit>& limit,
+                              const FuncResults& f)
 {
   const bool hasTraversalDirectionAny =
   std::find(traversalDirections.begin(),
@@ -1472,12 +1472,12 @@ VarQueryInfo& GraphDB<ID>::insert(const Element elem, const Variable & var, std:
 
 template<typename ID>
 void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
-                                                 const Element elem,
-                                                 const std::vector<ReturnClauseTerm>& returnClauseTerms,
-                                                 const openCypher::Labels& labels,
-                                                 const std::vector<const Expression*>* filter,
-                                                 const std::optional<Limit>& limit,
-                                                 FuncResults& f)
+                                                     const Element elem,
+                                                     const std::vector<ReturnClauseTerm>& returnClauseTerms,
+                                                     const openCypher::Labels& labels,
+                                                     const std::vector<const Expression*>* filter,
+                                                     const std::optional<Limit>& limit,
+                                                     const FuncResults& f)
 {
   sql::QueryVars sqlVars;
 

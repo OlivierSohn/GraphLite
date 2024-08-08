@@ -15,16 +15,13 @@ RegularQuery cypherQueryToAST(const PropertySchema& idProperty,
                               bool printCypherAST);
 
 using FOnColumns = std::function<void(const std::vector<std::string>&)>;
-using FOnRowOrder = std::function<void(const ResultOrder&)>;
-using FOnRow = std::function<void(const VecValues&)>;
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
 template<typename ID>
 void runSingleQuery(const RegularQuery& q,
                     GraphDB<ID>& db,
                     const FOnColumns& fOnColumns,
-                    const FOnRowOrder& fOnRowOrder,
-                    const FOnRow& fOnRow);
+                    const FuncResults& fOnRow);
 }
 
 
@@ -51,10 +48,8 @@ void runCypher(const std::string& cypherQuery,
   runSingleQuery(ast, db,
                  [&](const std::vector<std::string>& colNames)
                  { resultsHandler.onColumns(colNames); },
-                 [&](const ResultOrder& ro)
-                 { resultsHandler.onOrder(ro); },
-                 [&](const VecValues& values)
-                 { resultsHandler.onRow(values); });
+                 [&](const ResultOrder& ro, const VecValues& values)
+                 { resultsHandler.onRow(ro, values); });
 }
 } // NS
 

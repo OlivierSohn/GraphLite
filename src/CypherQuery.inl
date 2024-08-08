@@ -33,8 +33,7 @@ template<typename ID>
 void runSingleQuery(const RegularQuery& regularQuery,
                     GraphDB<ID>& db,
                     const FOnColumns& fOnColumns,
-                    const FOnRowOrder& fOnRowOrder,
-                    const FOnRow& fOnRow)
+                    const FuncResults& fOnRow)
 {
   std::optional<std::vector<std::string>> columnNames;
   for(const auto & q : regularQuery.unionAllSingleQueries)
@@ -55,18 +54,6 @@ void runSingleQuery(const RegularQuery& regularQuery,
 
   for(const auto & q : regularQuery.unionAllSingleQueries)
   {
-    bool sentOrder{};
-    auto fRow = std::function{[&](const ResultOrder& resultOrder,
-                                  const VecValues& values){
-      if(!sentOrder)
-      {
-        // resultOrder and columnNames will always be the same so we send them once only.
-        fOnRowOrder(resultOrder);
-        sentOrder = true;
-      }
-      fOnRow(values);
-    }};
-
     const auto & spq = q.singlePartQuery;
     if(!spq.mayReadingClause.has_value())
       throw std::logic_error("Not Implemented (Expected a reading clause)");
@@ -165,7 +152,7 @@ void runSingleQuery(const RegularQuery& regularQuery,
                      pathPatternElements,
                      whereExprsByVarsAndproperties,
                      limit,
-                     fRow);
+                     fOnRow);
     }
     else
     {
@@ -218,7 +205,7 @@ void runSingleQuery(const RegularQuery& regularQuery,
                                             labels,
                                             &filter,
                                             limit,
-                                            fRow);
+                                            fOnRow);
     }
   }
 }

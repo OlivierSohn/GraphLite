@@ -98,24 +98,20 @@ void QueryResultsHandler<ID>::onColumns(const std::vector<std::string>& columns)
   m_columnNames = columns;
 }
 template<typename ID>
-void QueryResultsHandler<ID>::onOrder(const ResultOrder& ro) {
-  m_resultOrder = ro;
-}
-template<typename ID>
-void QueryResultsHandler<ID>::onRow(const VecValues& values)
+void QueryResultsHandler<ID>::onRow(const ResultOrder& resultOrder, const VecValues& values)
 {
   if(m_printCypherRows)
   {
     auto _ = LogIndentScope();
     std::cout << LogIndent{};
     size_t col{};
-    for(const auto & [i, j] : m_resultOrder)
+    for(const auto & [i, j] : resultOrder)
       std::cout << m_columnNames[col++] << " = " << (*values[i])[j] << '|';
     std::cout << std::endl;
   }
   auto & row = m_rows.emplace_back();
-  row.reserve(m_resultOrder.size());
-  for(const auto & [i, j] : m_resultOrder)
+  row.reserve(resultOrder.size());
+  for(const auto & [i, j] : resultOrder)
     row.push_back(copy((*values[i])[j]));
 }
 

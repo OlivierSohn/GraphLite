@@ -196,8 +196,7 @@ struct QueryResultsHandler
   void onCypherQueryStarts(std::string const & cypherQuery);
 
   void onColumns(const std::vector<std::string>& columns);
-  void onOrder(const ResultOrder& ro);
-  void onRow(const VecValues& values);
+  void onRow(const ResultOrder& resultOrder, const VecValues& values);
   
   void onCypherQueryEnds();
   
