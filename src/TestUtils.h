@@ -195,10 +195,8 @@ struct QueryResultsHandler
     
   void onCypherQueryStarts(std::string const & cypherQuery);
 
-  void onOrderAndColumnNames(const ResultOrder& ro,
-                             const std::vector<openCypher::Variable>& vars,
-                             const VecColumnNames& colNames);
-  
+  void onColumns(const std::vector<std::string>& columns);
+  void onOrder(const ResultOrder& ro);
   void onRow(const VecValues& values);
   
   void onCypherQueryEnds();
@@ -206,7 +204,12 @@ struct QueryResultsHandler
   size_t countRows() const { return m_rows.size(); }
   const auto& rows() const { return m_rows; }
 
-  size_t countColumns() const { return m_resultOrder.size(); }
+  size_t countColumns() const { return m_columnNames.size(); }
+
+  const std::vector<std::string>& columns() const
+  {
+    return m_columnNames;
+  }
 
   size_t countSQLQueries() const { return m_db.m_queryStats.size(); }
 
@@ -235,7 +238,7 @@ private:
   std::unique_ptr<LogIndentScope> m_logIndentScope;
   ResultOrder m_resultOrder;
   std::vector<openCypher::Variable> m_variables;
-  VecColumnNames m_columnNames;
+  std::vector<std::string> m_columnNames;
   
   GraphWithStats<ID>& m_db;
   std::vector<std::vector<Value>> m_rows;

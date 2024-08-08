@@ -77,18 +77,12 @@ bool isNullSQLKeyword(std::string const & str)
 {
   if(str.size() != 4)
     return false;
-  auto str2 = str;
-  std::transform(str2.begin(), str2.end(), str2.begin(),
-                 [](unsigned char c){ return std::tolower(c); });
-  return str2 == "null";
+  return toLower(str) == "null";
 }
 
 ValueType SQLiteTypeToValueType(const char* sqliteColumnType)
 {
-  std::string str{sqliteColumnType};
-  
-  std::transform(str.begin(), str.end(), str.begin(),
-                 [](unsigned char c){ return std::tolower(c); });
+  const std::string str = toLower(sqliteColumnType);
   
   if(str.starts_with("int"))
     return ValueType::Integer;
@@ -1348,8 +1342,6 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
   // split nodes, dualNodes, relationships by types (if needed)
   
   // indexed by varToVarIdx[var]
-  std::vector<std::vector<PropertyKeyName>> strPropertiesByVar(countDistinctVariables);
-  // indexed by varToVarIdx[var]
   std::vector<std::unordered_map<ID, std::vector<Value>>> propertiesByVar(countDistinctVariables);
   {
     const auto endElementType = getEndElementType();
@@ -1358,9 +1350,6 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
     for(const auto & [var, returnedProperties] : variablesInfo)
     {
       const size_t i = varToVarIdx[var];
-      auto & props = strPropertiesByVar[i];
-      for(const auto & rct : returnedProperties)
-        props.push_back(rct.propertyName);
       const auto & info = varInfo[var];
       if(info.needsTypeInfo && info.lookupProperties)
       {
@@ -1377,6 +1366,11 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
           else
             elementsByType[idAndType.type].insert(idAndType.id.clone());
         }
+        std::vector<PropertyKeyName> props;
+        props.reserve(returnedProperties.size());
+        for(const auto & p : returnedProperties)
+          props.push_back(p.propertyName);
+
         // TODO: when we query the same labeled entity/relationship property tables for several variables,
         // instead of doing several queries we should do a single UNION ALL query
         // with an extra column containing the index of the variable.
@@ -1387,10 +1381,6 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
 
   // Return results according to callerRows
 
-  VecColumnNames vecColumnNames;
-  for(const auto & strProperties: strPropertiesByVar)
-    vecColumnNames.push_back(&strProperties);
-  
   // indexed by varToVarIdx[var]
   VecValues vecValues(countDistinctVariables);
   std::vector<const std::vector<ReturnClauseTerm>*> vecReturnClauses(countDistinctVariables);
@@ -1468,10 +1458,7 @@ void GraphDB<ID>::forEachPath(const std::vector<TraversalDirection>& traversalDi
         }
       }
     }
-    f(resultOrder,
-      orderedVariables,
-      vecColumnNames,
-      vecValues);
+    f(resultOrder, vecValues);
     ++countReturnedRows;
   nextRow:;
   }
@@ -1501,27 +1488,21 @@ void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
     propertyNames.push_back(rct.propertyName);
   
   struct Results{
-    Results(ResultOrder&&ro, VecColumnNames&& vecColumnNames, const FuncResults& func, const Variable& var)
+    Results(ResultOrder&&ro, const FuncResults& func)
     : m_resultsOrder(std::move(ro))
-    , m_vecColumnNames(std::move(vecColumnNames))
     , m_f(func)
     , m_vecValues{&m_values}
-    , m_orderedVariables{var}
     {
-      m_values.resize(m_vecColumnNames[0]->size());
+      m_values.resize(m_resultsOrder.size());
     }
 
     const ResultOrder m_resultsOrder;
-    const VecColumnNames m_vecColumnNames;
     std::vector<Value> m_values;
     const FuncResults& m_f;
-    const std::vector<Variable> m_orderedVariables;
     const std::vector<const std::vector<Value>*> m_vecValues;
   } results {
     computeResultOrder({&returnClauseTerms}),
-    {&propertyNames},
-    f,
-    var
+    f
   };
   
   std::vector<bool> validProperty;
@@ -1577,7 +1558,7 @@ void GraphDB<ID>::forEachElementPropertyWithLabelsIn(const Variable & var,
       auto & results = *static_cast<Results*>(p_results);
       for(int i=0; i<argc; ++i)
         results.m_values[i] = std::move(argv[i]);
-      results.m_f(results.m_resultsOrder, results.m_orderedVariables, results.m_vecColumnNames, results.m_vecValues);
+      results.m_f(results.m_resultsOrder, results.m_vecValues);
       return 0;
     }, &results, &msg, sqlVars))
       throw std::logic_error(msg);

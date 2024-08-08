@@ -29,6 +29,8 @@ LogIndentScope logScope(std::ostream& os, const std::string& scopeName);
 // String utility functions
 //
 
+std::string toLower(std::string const & str);
+
 // splits |req| in one or more parts.
 //
 // splitOn('test', '12test45test67') returns '12', 'test', '45', 'test', '67'.

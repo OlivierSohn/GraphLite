@@ -9,22 +9,21 @@ namespace openCypher
 {
 namespace detail
 {
-SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
-                             const std::string& query,
-                             const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
-                             bool printCypherAST);
+RegularQuery cypherQueryToAST(const PropertySchema& idProperty,
+                              const std::string& query,
+                              const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
+                              bool printCypherAST);
 
-using FOnOrderAndColumnNames = std::function<void(const ResultOrder&,
-                                                  const std::vector<Variable>&,
-                                                  const VecColumnNames&)>;
-
+using FOnColumns = std::function<void(const std::vector<std::string>&)>;
+using FOnRowOrder = std::function<void(const ResultOrder&)>;
 using FOnRow = std::function<void(const VecValues&)>;
 
 //fOnOrderAndColumnNames is guaranteed to be called before fOnRow;
 template<typename ID>
-void runSingleQuery(const SingleQuery& q,
+void runSingleQuery(const RegularQuery& q,
                     GraphDB<ID>& db,
-                    const FOnOrderAndColumnNames& fOnOrderAndColumnNames,
+                    const FOnColumns& fOnColumns,
+                    const FOnRowOrder& fOnRowOrder,
                     const FOnRow& fOnRow);
 }
 
@@ -50,8 +49,10 @@ void runCypher(const std::string& cypherQuery,
   } scope{resultsHandler};
 
   runSingleQuery(ast, db,
-                 [&](const ResultOrder& ro, const std::vector<Variable>& varNames, const VecColumnNames& colNames)
-                 { resultsHandler.onOrderAndColumnNames(ro, varNames, colNames); },
+                 [&](const std::vector<std::string>& colNames)
+                 { resultsHandler.onColumns(colNames); },
+                 [&](const ResultOrder& ro)
+                 { resultsHandler.onOrder(ro); },
                  [&](const VecValues& values)
                  { resultsHandler.onRow(values); });
 }

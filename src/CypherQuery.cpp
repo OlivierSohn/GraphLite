@@ -7,10 +7,10 @@
 
 namespace openCypher::detail
 {
-SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
-                             const std::string& query,
-                             const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
-                             const bool printAST)
+RegularQuery cypherQueryToAST(const PropertySchema& idProperty,
+                              const std::string& query,
+                              const std::map<ParameterName, HomogeneousNonNullableValues>& queryParams,
+                              const bool printAST)
 {
   auto chars = antlr4::ANTLRInputStream(query);
   auto lexer = CypherLexer(&chars);
@@ -36,9 +36,32 @@ SingleQuery cypherQueryToAST(const PropertySchema& idProperty,
     throw std::logic_error("Visitor errors:\n" + s.str());
   }
   
-  if(resVisit.type() != typeid(SingleQuery))
-    throw std::logic_error("No SingleQuery was returned.");
-  return std::any_cast<SingleQuery>(resVisit);;
+  if(resVisit.type() != typeid(RegularQuery))
+    throw std::logic_error("No RegularQuery was returned.");
+  return std::any_cast<RegularQuery>(resVisit);;
+}
+
+std::vector<std::string>
+extractColumnNames(const std::vector<ProjectionItem>& items)
+{
+  std::vector<std::string> res;
+  res.reserve(items.size());
+  for(const auto & [nao, mayVar] : items)
+  {
+    if(mayVar.has_value())
+      res.push_back(mayVar->symbolicName.str);
+    else
+    {
+      std::string name = std::get<openCypher::Variable>(nao.atom.var).symbolicName.str;
+      if(nao.mayPropertyName.has_value())
+      {
+        name += ".";
+        name += nao.mayPropertyName->symbolicName.str;
+      }
+      res.push_back(std::move(name));
+    }
+  }
+  return res;
 }
 
 } // NS

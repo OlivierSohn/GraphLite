@@ -960,10 +960,14 @@ struct ReadingClause{
 // Not used yet in valid cases.
 struct ListOperatorExpression{};
 
+struct ProjectionItem{
+  NonArithmeticOperatorExpression naoExp;
+  std::optional<Variable> asVariable;
+};
 
 struct ProjectionItems
 {
-  std::vector<NonArithmeticOperatorExpression> naoExps;
+  std::vector<ProjectionItem> items;
 };
 
 
@@ -988,6 +992,17 @@ struct SingleQuery{
   SinglePartQuery singlePartQuery;
 };
 
+struct Union{
+  SingleQuery query;
+};
+
+struct UnionAll{
+  SingleQuery query;
+};
+
+struct RegularQuery{
+  std::vector<SingleQuery> unionAllSingleQueries;
+};
 
 // Will be needed later
 /*
